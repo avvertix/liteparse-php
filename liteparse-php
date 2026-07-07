@@ -1,0 +1,43 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+
+use LiteParse\Console\InstallCommand;
+use LiteParse\Console\UpdateCommand;
+use Symfony\Component\Console\Application;
+
+// Resolve the Composer autoloader whether this package is installed as a
+// dependency (bin proxy sets $_composer_autoload_path) or run from its own
+// checkout during development.
+(static function (): void {
+    foreach ([
+        $_composer_autoload_path ?? null,
+        __DIR__.'/vendor/autoload.php',
+        __DIR__.'/../../autoload.php',
+    ] as $file) {
+        if ($file !== null && is_file($file)) {
+            require $file;
+
+            return;
+        }
+    }
+
+    fwrite(STDERR, "Unable to locate the Composer autoloader. Run `composer install` first.\n");
+    exit(1);
+})();
+
+// The package root is the directory that holds this bin file. When installed
+// as a dependency Composer runs the real bin from vendor/avvertix/liteparse-php,
+// so __DIR__ always points at the package, not at the consuming project.
+$packageRoot = __DIR__;
+
+// The project root is where the user invoked the command — the consuming
+// project — which is where natives.lock belongs (alongside composer.lock).
+$projectRoot = getcwd() ?: $packageRoot;
+
+$application = new Application('liteparse-php');
+$application->addCommands([
+    new InstallCommand($packageRoot, $projectRoot),
+    new UpdateCommand($packageRoot, $projectRoot),
+]);
+
+$application->run();

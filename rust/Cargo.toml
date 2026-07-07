@@ -1,0 +1,24 @@
+[package]
+name = "liteparse-php"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "liteparse_php"
+crate-type = ["cdylib"]
+
+[dependencies]
+liteparse = { version = "2.4.0", default-features = false }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

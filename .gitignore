@@ -1,0 +1,7 @@
+/vendor/
+/build/
+/.phpunit.cache/
+/rust/target/
+/natives.lock
+/examples/*/output/
+.DS_Store

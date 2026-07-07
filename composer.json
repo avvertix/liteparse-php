@@ -1,0 +1,36 @@
+{
+  "name": "avvertix/liteparse-php",
+  "description": "PHP FFI bindings for LiteParse, fast local PDF and document parsing with spatial text extraction",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": "^8.3",
+    "ext-ffi": "*",
+    "composer-runtime-api": "^2.0",
+    "symfony/console": "^6.4|^7.0|^8.0|^8.1"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^12.0",
+    "phpstan/phpstan": "^2.0",
+    "laravel/pint": "^1.29"
+  },
+  "autoload": {
+    "psr-4": {
+      "LiteParse\\": "src/LiteParse/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "LiteParse\\Tests\\": "tests/"
+    }
+  },
+  "bin": "liteparse-php",
+  "scripts": {
+    "test": "vendor/bin/phpunit",
+    "lint": "vendor/bin/phpstan analyse",
+    "format": "vendor/bin/pint"
+  },
+  "archive": {
+    "exclude": ["examples", "rust"]
+  }
+}

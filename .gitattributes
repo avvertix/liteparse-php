@@ -1,0 +1,12 @@
+# Make the PHP package lighter by "export-ignore" what's not necessary
+/.github export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/phpunit.xml.dist export-ignore
+/phpstan.neon.dist export-ignore
+/docs export-ignore
+/examples export-ignore
+/tests export-ignore
+/rust export-ignore
+/CHANGELOG.md export-ignore
+/CONTRIBUTING.md export-ignore
