@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    name: Build Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            lib_src: rust/target/debug/libliteparse_php.so
+            lib_dst: lib/libliteparse_php.so
+            pdfium_src: rust/target/debug/deps/libpdfium.so
+            pdfium_dst: lib/libpdfium.so
+            artifact: liteparse_php-linux
+          - os: macos-latest
+            lib_src: rust/target/debug/libliteparse_php.dylib
+            lib_dst: lib/libliteparse_php.dylib
+            pdfium_src: rust/target/debug/deps/libpdfium.dylib
+            pdfium_dst: lib/libpdfium.dylib
+            artifact: liteparse_php-macos
+          - os: windows-latest
+            lib_src: rust/target/debug/liteparse_php.dll
+            lib_dst: lib/liteparse_php.dll
+            pdfium_src: rust/target/debug/deps/pdfium.dll
+            pdfium_dst: lib/pdfium.dll
+            artifact: liteparse_php-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build Rust library (debug)
+        working-directory: rust
+        run: cargo build
+
+      - name: Stage libraries for upload
+        shell: bash
+        run: |
+          mkdir -p lib
+          cp ${{ matrix.lib_src }} ${{ matrix.lib_dst }}
+          cp ${{ matrix.pdfium_src }} ${{ matrix.pdfium_dst }}
+
+      - name: Upload library artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: lib
+          retention-days: 1
+
+  test:
+    name: PHP ${{ matrix.php }} (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        php: ["8.3", "8.4", "8.5"]
+        include:
+          - os: ubuntu-latest
+            artifact: liteparse_php-linux
+          - os: macos-latest
+            artifact: liteparse_php-macos
+          - os: windows-latest
+            artifact: liteparse_php-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download library artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: lib
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ffi, gd
+          ini-values: ffi.enable=On
+          coverage: none
+
+      - name: Install Composer dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Run PHP tests
+        run: composer test

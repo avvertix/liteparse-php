@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            lib_src: rust/target/release/libliteparse_php.so
+            lib_dst: lib/libliteparse_php.so
+            pdfium_src: rust/target/release/deps/libpdfium.so
+            pdfium_dst: lib/libpdfium.so
+          - os: macos-latest
+            lib_src: rust/target/release/libliteparse_php.dylib
+            lib_dst: lib/libliteparse_php.dylib
+            pdfium_src: rust/target/release/deps/libpdfium.dylib
+            pdfium_dst: lib/libpdfium.dylib
+          - os: windows-latest
+            lib_src: rust/target/release/liteparse_php.dll
+            lib_dst: lib/liteparse_php.dll
+            pdfium_src: rust/target/release/deps/pdfium.dll
+            pdfium_dst: lib/pdfium.dll
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release
+
+      - name: Build Rust library (release)
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Stage libraries
+        shell: bash
+        run: |
+          mkdir -p lib
+          cp ${{ matrix.lib_src }} ${{ matrix.lib_dst }}
+          cp ${{ matrix.pdfium_src }} ${{ matrix.pdfium_dst }}
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ matrix.lib_dst }}
+            ${{ matrix.pdfium_dst }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
