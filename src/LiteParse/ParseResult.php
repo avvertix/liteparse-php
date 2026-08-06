@@ -47,8 +47,24 @@ final class ParseResult
      *         font_is_buggy?: true, has_unicode_map_error?: true, mcid?: int,
      *         fill_color?: string, stroke_color?: string, confidence?: float,
      *         link?: string, strike?: true
-     *     }>
+     *     }>,
+     *     complexity?: array{
+     *         page_number: int, text_length: int, text_coverage: float,
+     *         has_substantial_images: bool, image_block_count: int, image_coverage: float,
+     *         largest_image_coverage: float, full_page_image: bool,
+     *         uncovered_vector_area: ?float, is_garbled: bool, page_area: float,
+     *         needs_ocr: bool,
+     *         reasons: list<"scanned"|"no-text"|"sparse-text"|"embedded-images"|"garbled"|"vector-text"|"annotation-text">,
+     *         layout?: array{
+     *             column_count: int, ruled_table_count: int, ruled_table_coverage: float,
+     *             text_table_run_count: int, figure_count: int, figure_coverage: float,
+     *             is_complex: bool, reasons: list<"multi-column"|"table-likely"|"dense-graphics">
+     *         }
+     *     }
      * }>}
+     *
+     * `complexity` is present per page only when `Config::$includeComplexity` is set; its nested
+     * `layout` is present whenever `complexity` is (populated during the same parse pass).
      */
     public function json(): array
     {

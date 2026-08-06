@@ -33,6 +33,27 @@ final class Config
      * @param  bool  $ocrFailureFatal  Whether a systemic OCR failure aborts the whole parse.
      * @param  int[]  $ocrHedgeDelaysMs  OCR request-hedging schedule (ms) for the HTTP OCR engine.
      * @param  bool  $emitWordBoxes  Emit per-word sub-boxes on each TextItem.
+     * @param  bool  $extractImages  Extract embedded image bytes/metadata into `ParseResult.images`.
+     * @param  ?string  $imageOutputDir  Directory where extracted embedded images are written.
+     *                                   Requires $extractImages.
+     * @param  bool  $extractAnnotations  Extract all PDF annotations into each parsed page.
+     * @param  ?array{top: float, right: float, bottom: float, left: float}  $cropBox  Restrict
+     *         output to a sub-region of every page, as fractions cropped from each side. Null
+     *         (default) keeps the whole page.
+     * @param  bool  $skipDiagonalText  Drop diagonal (skewed) text items more than 2° off the
+     *                                  nearest right angle.
+     * @param  bool  $includeComplexity  Compute per-page complexity signals during parse and
+     *                                   attach them as a `complexity` object on each page in
+     *                                   `ParseResult::json()`/`jsonString()` — text/image coverage,
+     *                                   garbled-text detection, OCR reasons, and a nested `layout`
+     *                                   object (column count, table/figure counts + coverage).
+     *                                   Default off: the walk this runs is only worth paying for
+     *                                   when the signals are actually consumed.
+     * @param  bool  $keepHeadersFooters  Keep running header/footer chrome (and single-page chrome
+     *                                    like "Page N of M") in `markdown()` output instead of
+     *                                    stripping it. Only affects Markdown output.
+     * @param  bool  $extractVectorGraphics  Expose page-scoped vector path data (shapes and merged
+     *                                       horizontal/vertical lines) in parse results.
      */
     public function __construct(
         public readonly string $ocrLanguage = 'eng',
@@ -53,6 +74,14 @@ final class Config
         public readonly bool $ocrFailureFatal = true,
         public readonly array $ocrHedgeDelaysMs = [],
         public readonly bool $emitWordBoxes = false,
+        public readonly bool $extractImages = false,
+        public readonly ?string $imageOutputDir = null,
+        public readonly bool $extractAnnotations = false,
+        public readonly ?array $cropBox = null,
+        public readonly bool $skipDiagonalText = false,
+        public readonly bool $includeComplexity = false,
+        public readonly bool $keepHeadersFooters = false,
+        public readonly bool $extractVectorGraphics = false,
     ) {}
 
     public function toJson(): string
@@ -72,10 +101,18 @@ final class Config
             'quiet' => $this->quiet,
             'num_workers' => $this->numWorkers,
             'image_mode' => $this->imageMode->value,
+            'extract_images' => $this->extractImages,
+            'image_output_dir' => $this->imageOutputDir,
             'extract_links' => $this->extractLinks,
+            'extract_annotations' => $this->extractAnnotations,
             'ocr_failure_fatal' => $this->ocrFailureFatal,
             'ocr_hedge_delays_ms' => $this->ocrHedgeDelaysMs,
             'emit_word_boxes' => $this->emitWordBoxes,
+            'crop_box' => $this->cropBox,
+            'skip_diagonal_text' => $this->skipDiagonalText,
+            'include_complexity' => $this->includeComplexity,
+            'keep_headers_footers' => $this->keepHeadersFooters,
+            'extract_vector_graphics' => $this->extractVectorGraphics,
         ], JSON_THROW_ON_ERROR);
     }
 }
