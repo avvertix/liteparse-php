@@ -38,8 +38,8 @@ final class Config
      *                                   Requires $extractImages.
      * @param  bool  $extractAnnotations  Extract all PDF annotations into each parsed page.
      * @param  ?array{top: float, right: float, bottom: float, left: float}  $cropBox  Restrict
-     *         output to a sub-region of every page, as fractions cropped from each side. Null
-     *         (default) keeps the whole page.
+     *                                                                                 output to a sub-region of every page, as fractions cropped from each side. Null
+     *                                                                                 (default) keeps the whole page.
      * @param  bool  $skipDiagonalText  Drop diagonal (skewed) text items more than 2° off the
      *                                  nearest right angle.
      * @param  bool  $includeComplexity  Compute per-page complexity signals during parse and
