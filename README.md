@@ -102,6 +102,8 @@ See [`examples/`](./examples/) for runnable scripts.
 | `ocrFailureFatal` | `true` | Abort the whole parse on systemic OCR failure vs. return degraded results |
 | `ocrHedgeDelaysMs` | `[]` | Request-hedging schedule for the HTTP OCR engine |
 | `emitWordBoxes` | `false` | Per-word sub-boxes on each text item (roughly doubles payload size) |
+| `includeComplexity` | `false` | Attach a `complexity` object (text/image coverage, OCR reasons, layout signals) to each page in `json()` |
+| `keepHeadersFooters` | `false` | Keep running headers/footers in `markdown()` instead of stripping them |
 
 ## How it works
 
