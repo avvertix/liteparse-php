@@ -1327,9 +1327,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "liteparse"
-version = "2.11.1"
+version = "2.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4686414f66b3840ccb9419bc077f229d53961addf5604e7c4fed867c4cf435d0"
+checksum = "c1f611758ea5a880d80f6f95ba3d7bc913ff6686d214f74c49ac778bf0e56071"
 dependencies = [
  "blake3",
  "clap",
@@ -1356,18 +1356,18 @@ dependencies = [
 
 [[package]]
 name = "liteparse-pdfium"
-version = "1.6.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e486b387cdd61c708d2ac5889023a276abb0695a94abf0f7162a4eba730ebf0"
+checksum = "ad60e933a6b3d6877132686731f600d6dc3b0e0f02d9d5e70d7a96b7e8f5bcd0"
 dependencies = [
  "liteparse-pdfium-sys",
 ]
 
 [[package]]
 name = "liteparse-pdfium-sys"
-version = "1.6.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7da9bbc929f6dea503c48c9580623ebf02c5316cec817f28e43dfacc54c38c"
+checksum = "4f32076a5a00c5cfa6923e9597f74f54f3eba41ecec062eb2d0bb62ee578ab75"
 dependencies = [
  "flate2",
  "libloading",
