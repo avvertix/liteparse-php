@@ -138,7 +138,7 @@ final class LiteParse
             'LiteParse::screenshotFile'
         );
 
-        return $this->collectScreenshots($listHandle);
+        return LiteParseFfi::collectScreenshots($listHandle);
     }
 
     /**
@@ -158,7 +158,7 @@ final class LiteParse
             'LiteParse::screenshotBytes'
         );
 
-        return $this->collectScreenshots($listHandle);
+        return LiteParseFfi::collectScreenshots($listHandle);
     }
 
     /** @internal Used by ParseResult/Screenshot helpers that need the raw handle. */
@@ -202,32 +202,5 @@ final class LiteParse
         }
 
         return [$buf, $count];
-    }
-
-    /** @return Screenshot[] */
-    private function collectScreenshots(CData $listHandle): array
-    {
-        $ffi = LiteParseFfi::instance();
-        $count = $ffi->liteparse_screenshot_list_len($listHandle);
-        $lenPtr = $ffi->new('size_t');
-
-        $screenshots = [];
-        for ($i = 0; $i < $count; $i++) {
-            $bytesPtr = $ffi->liteparse_screenshot_bytes($listHandle, $i, \FFI::addr($lenPtr));
-            $bytes = ($bytesPtr !== null && ! \FFI::isNull($bytesPtr))
-                ? \FFI::string($bytesPtr, (int) $lenPtr->cdata)
-                : '';
-
-            $screenshots[] = new Screenshot(
-                pageNumber: $ffi->liteparse_screenshot_page_number($listHandle, $i),
-                width: $ffi->liteparse_screenshot_width($listHandle, $i),
-                height: $ffi->liteparse_screenshot_height($listHandle, $i),
-                bytes: $bytes,
-            );
-        }
-
-        $ffi->liteparse_screenshot_list_free($listHandle);
-
-        return $screenshots;
     }
 }

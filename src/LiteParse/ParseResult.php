@@ -37,7 +37,17 @@ final class ParseResult
      * OCR-derived items (where `confidence` is present) carry `null` for
      * `font_name`/`font_size`/colors, since OCR reports no font metadata.
      *
-     * @return array{pages: list<array{
+     * @return array{
+     *     total_pages: int,
+     *     doc_meta: ?array{
+     *         creation_date?: string, mod_date?: string, file_version?: int,
+     *         is_encrypted?: bool, security_handler_revision?: int, permissions?: int,
+     *         eof_section_count?: int, startxref_count?: int, trailer_id_pair_differs?: bool,
+     *         raw_file_size?: int, xmp?: string, xmp_truncated?: bool, signature_count?: int,
+     *         signature_byte_range_reaches_eof?: bool
+     *     },
+     *     page_errors: list<array{page: int, message: string}>,
+     *     pages: list<array{
      *     page_number: int, page_width: float, page_height: float, text: string, markdown?: string,
      *     text_items: list<array{
      *         text: string, x: float, y: float, width: float, height: float, rotation: float,
@@ -60,11 +70,24 @@ final class ParseResult
      *             text_table_run_count: int, figure_count: int, figure_coverage: float,
      *             is_complex: bool, reasons: list<"multi-column"|"table-likely"|"dense-graphics">
      *         }
-     *     }
+     *     },
+     *     blocks?: list<array{
+     *         kind: "heading"|"paragraph"|"list_item"|"code"|"table"|"merged_table"|"grid_fallback"|"rule"|"figure",
+     *         text?: string, level?: int, bold?: true, italic?: true,
+     *         ordered?: bool, marker?: string, lines?: list<string>, lang?: string,
+     *         header?: list<array{text: string, bbox?: array{x: float, y: float, width: float, height: float}, colspan?: int, rowspan?: int}>,
+     *         rows?: list<list<array{text: string, bbox?: array{x: float, y: float, width: float, height: float}, colspan?: int, rowspan?: int}>>,
+     *         header_rows?: int, id?: string, format?: string,
+     *         bbox?: array{x: float, y: float, width: float, height: float}
+     *     }>
      * }>}
      *
      * `complexity` is present per page only when `Config::$includeComplexity` is set; its nested
      * `layout` is present whenever `complexity` is (populated during the same parse pass).
+     * `blocks` is present per page only when `Config::$extractBlocks` is set — `bbox` on each block
+     * is the union of every source line that fed it; a block with no page geometry behind it omits
+     * `bbox` entirely. `doc_meta` is `null` unless `Config::$extractDocumentMetadata` is set.
+     * `page_errors` is empty unless `Config::$continueOnPageError` is set.
      */
     public function json(): array
     {
@@ -149,6 +172,24 @@ final class ParseResult
             LiteParseFfi::instance()->liteparse_result_markdown($this->handle),
             'ParseResult::markdown'
         );
+    }
+
+    /**
+     * This result's rendered page screenshots. Empty unless the parser was
+     * configured with `Config::$extractScreenshots` — when it's off, prefer
+     * `LiteParse::screenshotFile()`/`screenshotBytes()` instead of paying for
+     * unwanted rendering on every parse.
+     *
+     * @return Screenshot[]
+     */
+    public function screenshots(): array
+    {
+        $listHandle = LiteParseFfi::assertHandle(
+            LiteParseFfi::instance()->liteparse_result_screenshots($this->handle),
+            'ParseResult::screenshots'
+        );
+
+        return LiteParseFfi::collectScreenshots($listHandle);
     }
 
     /**

@@ -106,6 +106,15 @@ struct ResultHandle *liteparse_parser_parse_bytes(const struct ParserHandle *han
  * already derive `Serialize` directly (with internal-only fields marked
  * `#[serde(skip)]`), so serializing `data.result.pages` as-is gives the PHP
  * side every field liteparse extracts per text item, at no extra cost.
+ *
+ * Also includes the `ParseResult`-level fields that don't live on a page:
+ * `total_pages` (source page count before `max_pages`/`target_pages`
+ * truncation), `doc_meta` (present when `extract_document_metadata` is on,
+ * `null` otherwise), and `page_errors` (populated when
+ * `continue_on_page_error` is on, empty otherwise). Page screenshots are
+ * deliberately not folded in here — PNG bytes would have to go through
+ * base64 — see `liteparse_result_screenshots` instead.
+ *
  * Returns NULL on error (rare — JSON formatting of already-parsed data does
  * not normally fail). Free the result with `liteparse_string_free`.
  *
@@ -167,6 +176,20 @@ char *liteparse_result_markdown(const struct ResultHandle *handle);
  * `liteparse_parser_parse_*` function and not yet freed.
  */
 uintptr_t liteparse_result_page_count(const struct ResultHandle *handle);
+
+/**
+ * This result's rendered page screenshots, populated only when the parser
+ * was configured with `extract_screenshots` (empty otherwise). Reuses the
+ * same `ScreenshotListHandle` accessors (`liteparse_screenshot_list_len`,
+ * `liteparse_screenshot_bytes`, ...) as the standalone
+ * `liteparse_parser_screenshot_*` calls. Free the returned list with
+ * `liteparse_screenshot_list_free`.
+ *
+ * # Safety
+ * `handle` must be a valid, non-null pointer returned by a
+ * `liteparse_parser_parse_*` function and not yet freed.
+ */
+struct ScreenshotListHandle *liteparse_result_screenshots(const struct ResultHandle *handle);
 
 /**
  * # Safety

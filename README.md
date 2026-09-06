@@ -50,13 +50,17 @@ echo json_encode($result->lines());  // structured per-page projected lines: mer
 
 `lines()` sits between `json()` and `markdown()`: each entry is a merged visual line (one or more `TextItem`s sharing a baseline) carrying its own bounding box, dominant font/style, and `region_path` — the xy-cut column/region position `liteparse` uses internally to group paragraphs and tables. Each line's `spans` field keeps the original `TextItem`s that merged into it, so per-run font/color survives even where the line's own `text` concatenates multiple items. Unlike `markdown()`, nothing here is reformatted or dropped when the heuristic table/heading detection misfires — you get the raw geometry and can reconstruct rows/columns/headings yourself from `region_path` and bbox positions. There is no heading/paragraph/list "role" label at this layer.
 
+With `Config::$extractBlocks` on, `json()` also attaches a per-page `blocks` array: the same classified heading/paragraph/list/table/figure decomposition `markdown()` renders from, exposed as data with a bounding box on every block (the union of every source line that fed it) — including a bbox on every table cell. Independent of `outputFormat`; enabling it never changes the rendered Markdown. Table header detection can still land a header row as a separate block next to the table rather than inside it (see `adaptations.md`), so a consumer that needs the header should sanity-check an unattached heading/paragraph block sitting just above the table's `bbox`.
+
+With `Config::$extractDocumentMetadata` and `Config::$continueOnPageError` on, `json()`'s top level also carries `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) and `page_errors` (page-level extraction failures that didn't abort the parse); `total_pages` (source page count before `maxPages`/`targetPages` truncation) is always present.
+
 Every `ParseResult` accessor (`text()`, `markdown()`, `json()`, `lines()`) renders on demand from the same underlying parsed pages.
 
 ## Features
 
 - **`LiteParse::parseFile()` / `parseBytes()`** — parse from a file path or an in-memory buffer (e.g. a PDF downloaded over the network).
 - **`LiteParse::isComplexFile()` / `isComplexBytes()`** — a cheap per-page pre-check (no OCR, no rendering) reporting whether each page looks scanned, sparse, garbled, or image-heavy — useful for deciding whether a document needs OCR before committing to a full parse.
-- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes.
+- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes. With `Config::$extractScreenshots` on, `ParseResult::screenshots()` returns the same pages' PNGs from the parse that already happened, instead of rendering a second time.
 - **`ParseResult::search()`** — search already-parsed text for phrase matches, with bounding boxes, merged across text items that were split mid-phrase.
 
 ```php
@@ -99,11 +103,21 @@ See [`examples/`](./examples/) for runnable scripts.
 | `numWorkers` | `1` | Concurrent OCR requests to the HTTP server |
 | `imageMode` | `ImageMode::Placeholder` | Affects `markdown()` image references only |
 | `extractLinks` | `true` | Hyperlinks as `[text](url)` in markdown |
+| `extractImages` | `false` | Extract embedded image bytes/metadata into `ParseResult.images` |
+| `imageOutputDir` | `null` | Directory where extracted embedded images are written; requires `extractImages` |
+| `extractAnnotations` | `false` | Extract all PDF annotations into each parsed page |
+| `cropBox` | `null` | Restrict output to a sub-region of every page: `['top' => ..., 'right' => ..., 'bottom' => ..., 'left' => ...]` fractions |
+| `skipDiagonalText` | `false` | Drop text items rotated more than 2° off the nearest right angle |
 | `ocrFailureFatal` | `true` | Abort the whole parse on systemic OCR failure vs. return degraded results |
 | `ocrHedgeDelaysMs` | `[]` | Request-hedging schedule for the HTTP OCR engine |
 | `emitWordBoxes` | `false` | Per-word sub-boxes on each text item (roughly doubles payload size) |
 | `includeComplexity` | `false` | Attach a `complexity` object (text/image coverage, OCR reasons, layout signals) to each page in `json()` |
 | `keepHeadersFooters` | `false` | Keep running headers/footers in `markdown()` instead of stripping them |
+| `extractVectorGraphics` | `false` | Expose page-scoped vector path data (shapes, merged lines) in parse results |
+| `extractBlocks` | `false` | Attach a `blocks` array (headings, paragraphs, tables with per-cell boxes, figures, ...) with bounding boxes to each page in `json()` |
+| `extractDocumentMetadata` | `false` | Populate `json()`'s top-level `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) |
+| `extractScreenshots` | `false` | Render every page to PNG during `parseFile()`/`parseBytes()`, available via `ParseResult::screenshots()` |
+| `continueOnPageError` | `false` | Continue past a page-level extraction failure instead of aborting the parse; failures land in `json()`'s top-level `page_errors` |
 
 ## How it works
 
