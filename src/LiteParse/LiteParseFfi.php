@@ -23,6 +23,7 @@ use FFI\CData;
  * @method ?CData liteparse_result_text(CData $handle)
  * @method ?CData liteparse_result_markdown(CData $handle)
  * @method int liteparse_result_page_count(CData $handle)
+ * @method ?CData liteparse_result_screenshots(CData $handle)
  * @method void liteparse_result_free(CData $handle)
  * @method ?CData liteparse_parser_is_complex_file(CData $handle, CData $path)
  * @method ?CData liteparse_parser_is_complex_bytes(CData $handle, ?CData $data, int $len)
@@ -204,5 +205,38 @@ final class LiteParseFfi
         }
 
         return $handle;
+    }
+
+    /**
+     * Drain a `ScreenshotListHandle` into `Screenshot` value objects and free
+     * the list. Shared by `LiteParse::screenshotFile()`/`screenshotBytes()`
+     * and `ParseResult::screenshots()`.
+     *
+     * @return Screenshot[]
+     */
+    public static function collectScreenshots(CData $listHandle): array
+    {
+        $ffi = self::instance();
+        $count = $ffi->liteparse_screenshot_list_len($listHandle);
+        $lenPtr = $ffi->new('size_t');
+
+        $screenshots = [];
+        for ($i = 0; $i < $count; $i++) {
+            $bytesPtr = $ffi->liteparse_screenshot_bytes($listHandle, $i, \FFI::addr($lenPtr));
+            $bytes = ($bytesPtr !== null && ! \FFI::isNull($bytesPtr))
+                ? \FFI::string($bytesPtr, (int) $lenPtr->cdata)
+                : '';
+
+            $screenshots[] = new Screenshot(
+                pageNumber: $ffi->liteparse_screenshot_page_number($listHandle, $i),
+                width: $ffi->liteparse_screenshot_width($listHandle, $i),
+                height: $ffi->liteparse_screenshot_height($listHandle, $i),
+                bytes: $bytes,
+            );
+        }
+
+        $ffi->liteparse_screenshot_list_free($listHandle);
+
+        return $screenshots;
     }
 }

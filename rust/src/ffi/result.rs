@@ -3,7 +3,10 @@ use std::ffi::c_char;
 use liteparse::output::{markdown, text};
 
 use crate::error::set_last_error;
-use crate::ffi::handles::{ResultHandle, result_drop, result_ref};
+use crate::ffi::handles::{
+    ResultHandle, ScreenshotListData, ScreenshotListHandle, result_drop, result_ref,
+    screenshot_list_into_handle,
+};
 use crate::ffi::strings::string_to_owned_c_char;
 
 /// Render the parsed document as pretty-printed JSON. Deliberately does
@@ -15,6 +18,15 @@ use crate::ffi::strings::string_to_owned_c_char;
 /// already derive `Serialize` directly (with internal-only fields marked
 /// `#[serde(skip)]`), so serializing `data.result.pages` as-is gives the PHP
 /// side every field liteparse extracts per text item, at no extra cost.
+///
+/// Also includes the `ParseResult`-level fields that don't live on a page:
+/// `total_pages` (source page count before `max_pages`/`target_pages`
+/// truncation), `doc_meta` (present when `extract_document_metadata` is on,
+/// `null` otherwise), and `page_errors` (populated when
+/// `continue_on_page_error` is on, empty otherwise). Page screenshots are
+/// deliberately not folded in here — PNG bytes would have to go through
+/// base64 — see `liteparse_result_screenshots` instead.
+///
 /// Returns NULL on error (rare — JSON formatting of already-parsed data does
 /// not normally fail). Free the result with `liteparse_string_free`.
 ///
@@ -24,7 +36,12 @@ use crate::ffi::strings::string_to_owned_c_char;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_result_json(handle: *const ResultHandle) -> *mut c_char {
     let data = unsafe { result_ref(handle) };
-    match serde_json::to_string_pretty(&serde_json::json!({ "pages": &data.result.pages })) {
+    match serde_json::to_string_pretty(&serde_json::json!({
+        "pages": &data.result.pages,
+        "total_pages": data.result.total_pages,
+        "doc_meta": &data.result.doc_meta,
+        "page_errors": &data.result.page_errors,
+    })) {
         Ok(s) => string_to_owned_c_char(s),
         Err(e) => {
             set_last_error(format!("failed to format JSON: {e}"));
@@ -115,6 +132,26 @@ pub unsafe extern "C" fn liteparse_result_markdown(handle: *const ResultHandle) 
 pub unsafe extern "C" fn liteparse_result_page_count(handle: *const ResultHandle) -> usize {
     let data = unsafe { result_ref(handle) };
     data.result.pages.len()
+}
+
+/// This result's rendered page screenshots, populated only when the parser
+/// was configured with `extract_screenshots` (empty otherwise). Reuses the
+/// same `ScreenshotListHandle` accessors (`liteparse_screenshot_list_len`,
+/// `liteparse_screenshot_bytes`, ...) as the standalone
+/// `liteparse_parser_screenshot_*` calls. Free the returned list with
+/// `liteparse_screenshot_list_free`.
+///
+/// # Safety
+/// `handle` must be a valid, non-null pointer returned by a
+/// `liteparse_parser_parse_*` function and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_screenshots(
+    handle: *const ResultHandle,
+) -> *mut ScreenshotListHandle {
+    let data = unsafe { result_ref(handle) };
+    screenshot_list_into_handle(ScreenshotListData {
+        items: data.result.screenshots.clone(),
+    })
 }
 
 /// # Safety

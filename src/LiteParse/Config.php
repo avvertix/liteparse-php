@@ -54,6 +54,25 @@ final class Config
      *                                    stripping it. Only affects Markdown output.
      * @param  bool  $extractVectorGraphics  Expose page-scoped vector path data (shapes and merged
      *                                       horizontal/vertical lines) in parse results.
+     * @param  bool  $extractBlocks  Emit each page's classified layout blocks (headings,
+     *                               paragraphs, list items, tables with per-cell boxes, code,
+     *                               rules, figures) with bounding boxes, as `ParseResult::json()`'s
+     *                               per-page `blocks` array. This is the same decomposition the
+     *                               Markdown renderer consumes, exposed as data — independent of
+     *                               `outputFormat`, and never changes the rendered Markdown.
+     * @param  bool  $extractDocumentMetadata  Collect document provenance metadata (dates,
+     *                                         version/security, signatures, incremental-save
+     *                                         markers, trailer IDs, raw XMP, source size) into
+     *                                         `ParseResult::json()`'s top-level `doc_meta`.
+     * @param  bool  $extractScreenshots  Render every parsed page to PNG during `parseFile()`/
+     *                                    `parseBytes()` and make them available via
+     *                                    `ParseResult::screenshots()`, instead of requiring a
+     *                                    separate `screenshotFile()`/`screenshotBytes()` call.
+     * @param  bool  $continueOnPageError  Continue parsing after a page-level extraction failure
+     *                                     instead of aborting the whole parse, and report it in
+     *                                     `ParseResult::json()`'s top-level `page_errors`.
+     *                                     Document-open and document-level failures remain fatal
+     *                                     regardless of this setting.
      */
     public function __construct(
         public readonly string $ocrLanguage = 'eng',
@@ -82,6 +101,10 @@ final class Config
         public readonly bool $includeComplexity = false,
         public readonly bool $keepHeadersFooters = false,
         public readonly bool $extractVectorGraphics = false,
+        public readonly bool $extractBlocks = false,
+        public readonly bool $extractDocumentMetadata = false,
+        public readonly bool $extractScreenshots = false,
+        public readonly bool $continueOnPageError = false,
     ) {}
 
     public function toJson(): string
@@ -113,6 +136,10 @@ final class Config
             'include_complexity' => $this->includeComplexity,
             'keep_headers_footers' => $this->keepHeadersFooters,
             'extract_vector_graphics' => $this->extractVectorGraphics,
+            'extract_blocks' => $this->extractBlocks,
+            'extract_document_metadata' => $this->extractDocumentMetadata,
+            'extract_screenshots' => $this->extractScreenshots,
+            'continue_on_page_error' => $this->continueOnPageError,
         ], JSON_THROW_ON_ERROR);
     }
 }
