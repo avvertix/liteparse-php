@@ -101,6 +101,18 @@ Three established patterns, by where the field lives and what it holds:
   no accessor by default; only `.pages` is serialized. Fold it into
   `liteparse_result_json`'s top-level JSON object as a sibling of `"pages"`
   (`rust/src/ffi/result.rs`). Used for `total_pages`, `doc_meta`, `page_errors`.
+
+`src/LiteParse/Layout/BlockKind.php` is a PHP backed enum mirroring the exact set of `kind`
+string literals upstream's `LayoutBlock` can emit (`heading`, `paragraph`, `list_item`,
+`code`, `table`, `merged_table`, `grid_fallback`, `rule`, `figure` — confirmed exhaustive by
+grepping `LayoutBlock::of("...")` call sites in `crates/liteparse/src/layout.rs`, not by
+reading a docblock). `Block::fromArray()` calls `BlockKind::from($data['kind'])`, which
+throws a `\ValueError` on any kind string with no matching case — the correct, fail-loud
+behavior if it ever happens, not a bug to fix defensively. But it means **a new block kind
+added upstream is a runtime exception for every `blocks()`/`flatBlocks()` caller**, not a
+compile error like a Rust-side breaking change would be. Re-run the same grep every bump and
+add any new case to `BlockKind` before it ships, the same way step 3 audits `config.rs`
+field-by-field.
 - **Handle + accessor** — binary or large payloads (PNG bytes, anything you would not
   base64 through JSON) get their own opaque handle and by-index C accessors, mirroring
   `ScreenshotListHandle` in `rust/src/ffi/handles.rs` / `rust/src/ffi/screenshot.rs`. Used

@@ -26,6 +26,8 @@ vendor/bin/liteparse-php install
 
 `install` downloads the compiled `liteparse_php` library and its PDFium dependency for your platform from the package's GitHub Releases into `vendor/avvertix/liteparse-php/lib/`. The specific installed versions are recorded in a `natives.lock` file in the root of your project, commit this alongside `composer.lock` to install the same version of the compiled binary. Run `vendor/bin/liteparse-php update` after upgrading the package to fetch the matching native library.
 
+Upgrading from an earlier version? See [`UPGRADE.md`](./UPGRADE.md) for what changed and what needs attention.
+
 
 
 ## Quick start
