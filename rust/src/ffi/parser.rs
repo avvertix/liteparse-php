@@ -93,8 +93,13 @@ pub unsafe extern "C" fn liteparse_parser_parse_bytes(
 
 fn parse_and_wrap(data: &ParserData, input: PdfInput) -> *mut ResultHandle {
     let image_mode = data.parser.config().image_mode;
+    let keep_headers_footers = data.parser.config().keep_headers_footers;
     match block_on(data.parser.parse_input(input)) {
-        Ok(result) => result_into_handle(ResultData { result, image_mode }),
+        Ok(result) => result_into_handle(ResultData {
+            result,
+            image_mode,
+            keep_headers_footers,
+        }),
         Err(e) => {
             set_last_error(e.to_string());
             std::ptr::null_mut()

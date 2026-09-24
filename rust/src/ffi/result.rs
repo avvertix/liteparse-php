@@ -1,6 +1,7 @@
 use std::ffi::c_char;
 
-use liteparse::output::{markdown, text};
+use liteparse::output::text;
+use liteparse::stages;
 
 use crate::error::set_last_error;
 use crate::ffi::handles::{
@@ -14,10 +15,20 @@ use crate::ffi::strings::string_to_owned_c_char;
 /// backs the `lit` CLI's `--format json` and intentionally drops most
 /// `TextItem` fields (font size, fill/stroke color, rotation, links,
 /// strikethrough, ...) down to a lean `{text, x, y, width, height,
-/// font_name, font_size, confidence}` shape. `ParsedPage` and `TextItem`
-/// already derive `Serialize` directly (with internal-only fields marked
-/// `#[serde(skip)]`), so serializing `data.result.pages` as-is gives the PHP
-/// side every field liteparse extracts per text item, at no extra cost.
+/// font_name, font_size, confidence}` shape, and we want the richer one.
+///
+/// Builds its own per-page view (`page_to_json`) rather than serializing
+/// `ParsedPage` as-is. `ParsedPage` carries several fields liteparse
+/// considers internal (`projected_lines`, `regions`, `graphics`, `figures`,
+/// `struct_nodes`, `image_refs`, ...) that used to be unconditionally
+/// `#[serde(skip)]`; as of the 2.14.7 upgrade several of those switched to
+/// `skip_serializing_if`, meaning a naive `&data.result.pages` serialize
+/// would have started silently leaking them into every `json()` response
+/// (upstream's own `format_json` is unaffected — it already builds its own
+/// view struct field-by-field, same idea as here). Allowlisting fields here
+/// means any future "internal field no longer skipped" upstream change is
+/// inert for us instead of a silent payload/output-shape regression: a new
+/// field only reaches PHP once someone deliberately adds it below.
 ///
 /// Also includes the `ParseResult`-level fields that don't live on a page:
 /// `total_pages` (source page count before `max_pages`/`target_pages`
@@ -36,8 +47,9 @@ use crate::ffi::strings::string_to_owned_c_char;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_result_json(handle: *const ResultHandle) -> *mut c_char {
     let data = unsafe { result_ref(handle) };
+    let pages: Vec<serde_json::Value> = data.result.pages.iter().map(page_to_json).collect();
     match serde_json::to_string_pretty(&serde_json::json!({
-        "pages": &data.result.pages,
+        "pages": pages,
         "total_pages": data.result.total_pages,
         "doc_meta": &data.result.doc_meta,
         "page_errors": &data.result.page_errors,
@@ -50,6 +62,49 @@ pub unsafe extern "C" fn liteparse_result_json(handle: *const ResultHandle) -> *
     }
 }
 
+/// The public per-page shape for `liteparse_result_json`, documented in
+/// `ParseResult::json()`'s PHP docblock — keep the two in sync. Every
+/// optional field is omitted (not emitted as `null`) when absent, matching
+/// `ParsedPage`'s own `skip_serializing_if` behavior for the fields it
+/// mirrors, so existing consumers see the same shape across upgrades
+/// regardless of what liteparse adds to `ParsedPage` itself.
+fn page_to_json(page: &liteparse::ParsedPage) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("page_number".into(), serde_json::json!(page.page_number));
+    if let Some(label) = &page.page_label {
+        obj.insert("page_label".into(), serde_json::json!(label));
+    }
+    obj.insert("page_width".into(), serde_json::json!(page.page_width));
+    obj.insert("page_height".into(), serde_json::json!(page.page_height));
+    if let Some(bounds) = &page.content_bounds {
+        obj.insert("content_bounds".into(), serde_json::json!(bounds));
+    }
+    obj.insert("text".into(), serde_json::json!(&page.text));
+    if !page.markdown.is_empty() {
+        obj.insert("markdown".into(), serde_json::json!(&page.markdown));
+    }
+    obj.insert("text_items".into(), serde_json::json!(&page.text_items));
+    if let Some(vector_graphics) = &page.vector_graphics {
+        obj.insert("vector_graphics".into(), serde_json::json!(vector_graphics));
+    }
+    if let Some(complexity) = &page.complexity {
+        obj.insert("complexity".into(), serde_json::json!(complexity));
+    }
+    if let Some(annotations) = &page.annotations {
+        obj.insert("annotations".into(), serde_json::json!(annotations));
+    }
+    if let Some(form_fields) = &page.form_fields {
+        obj.insert("form_fields".into(), serde_json::json!(form_fields));
+    }
+    if let Some(structure_tree) = &page.structure_tree {
+        obj.insert("structure_tree".into(), serde_json::json!(structure_tree));
+    }
+    if let Some(blocks) = &page.blocks {
+        obj.insert("blocks".into(), serde_json::json!(blocks));
+    }
+    serde_json::Value::Object(obj)
+}
+
 /// Render the parsed document's projected lines as pretty-printed JSON — a
 /// middle layer between the flat `liteparse_result_json` (`TextItem`s: one per
 /// PDFium text run, no grouping) and `liteparse_result_markdown` (fully
@@ -60,11 +115,13 @@ pub unsafe extern "C" fn liteparse_result_json(handle: *const ResultHandle) -> *
 /// `TextItem`s that merged into it, so per-run font/color/text survives even
 /// where `line.text` concatenates multiple items).
 ///
-/// `ProjectedLine` already derives `Serialize` and is a public field on
-/// `ParsedPage` — `#[serde(skip)]` there only suppresses it from
-/// `ParsedPage`'s own derive, it doesn't stop us serializing it directly, same
-/// bypass as `liteparse_result_json`. Returns NULL on error. Free the result
-/// with `liteparse_string_free`.
+/// `ProjectedLine` already derives `Serialize`. `ParsedPage.projected_lines`
+/// itself carries `#[serde(skip_serializing_if = "Vec::is_empty")]` (nothing
+/// stronger), but that attribute only matters when serializing a `ParsedPage`
+/// value directly — accessing `&page.projected_lines` and serializing that
+/// `Vec<ProjectedLine>` on its own, as this function does, was never affected
+/// by it either way. Returns NULL on error. Free the result with
+/// `liteparse_string_free`.
 ///
 /// # Safety
 /// `handle` must be a valid, non-null pointer returned by a
@@ -110,17 +167,44 @@ pub unsafe extern "C" fn liteparse_result_text(handle: *const ResultHandle) -> *
 /// tables and figure references from the spatial layout. Free the result
 /// with `liteparse_string_free`.
 ///
+/// liteparse 2.14.7 removed the single-call `output::markdown::format_markdown`
+/// this used to delegate to, in favor of composable per-page stage functions
+/// (`stages::document_signals`/`extract_blocks`/`render_page_markdown`) —
+/// `parse()` itself now only runs them when `output_format == Markdown`, so
+/// there is no longer a document-level convenience wrapper to call after the
+/// fact. This reconstructs it here so `markdown()` keeps working regardless
+/// of what `output_format` the parser was configured with, same as before.
+///
+/// This also fixes a latent bug: the old `format_markdown(pages, outline,
+/// image_mode)` call this replaced took no `keep_headers_footers` parameter
+/// at all — it always rendered with chrome suppression on, silently ignoring
+/// `Config::$keepHeadersFooters` — because the config-aware call was a
+/// different, four-argument function (`format_markdown_pages`) this never
+/// called. `keep_headers_footers` is threaded through correctly now, cached
+/// on `ResultData` at parse time alongside `image_mode` for the same reason.
+///
 /// # Safety
 /// `handle` must be a valid, non-null pointer returned by a
 /// `liteparse_parser_parse_*` function and not yet freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_result_markdown(handle: *const ResultHandle) -> *mut c_char {
     let data = unsafe { result_ref(handle) };
-    string_to_owned_c_char(markdown::format_markdown(
-        &data.result.pages,
-        &data.result.outline,
-        data.image_mode,
-    ))
+    let signals = stages::document_signals(&data.result.pages, data.keep_headers_footers);
+    let options = stages::BlockOptions {
+        outline: &data.result.outline,
+        image_mode: data.image_mode,
+        keep_headers_footers: data.keep_headers_footers,
+    };
+    let page_md: Vec<String> = data
+        .result
+        .pages
+        .iter()
+        .map(|page| {
+            let blocks = stages::extract_blocks(page, &signals, &options);
+            stages::render_page_markdown(page, blocks.as_deref())
+        })
+        .collect();
+    string_to_owned_c_char(page_md.join("\n\n-----\n\n"))
 }
 
 /// Number of pages in the parsed document.
