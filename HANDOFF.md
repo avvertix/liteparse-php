@@ -22,7 +22,13 @@ entry. Anything not listed here is not exposed from PHP yet (see "Known gaps" be
 `ocrHedgeDelaysMs`, `emitWordBoxes`, `extractImages`, `imageOutputDir`,
 `extractAnnotations`, `cropBox`, `skipDiagonalText`, `includeComplexity`,
 `keepHeadersFooters`, `extractVectorGraphics`, `extractBlocks`,
-`extractDocumentMetadata`, `extractScreenshots`, `continueOnPageError`.
+`extractDocumentMetadata`, `extractScreenshots`, `continueOnPageError`,
+`extractFormFields`, `extractStructureTree`, `extractContentBounds`,
+`extractXfaPackets`, `extractTextMetadata`, `detectScreenshotRects`,
+`renderFormFields`, `pageOrientationCorrections`.
+
+Every `LiteParseConfig` field now has a matching `Config.php` constructor param, as of
+the 2026-09-24 "wire everything remaining" pass — see `adaptations.md`.
 
 `ParseResult` accessors: `pageCount()`, `json()`/`jsonString()`, `lines()`/`linesJson()`,
 `text()`, `markdown()`, `search()`, `screenshots()`, `blocks()`/`flatBlocks()`, `images()`.
@@ -46,51 +52,23 @@ else in `json()` stays a raw array.
 
 ## Known gaps — not wired, no open question, just not asked for yet
 
-Deliberately parked after the 2026-09-24 blocks/images pass — real capability, but no
-concrete consumer driving the shape yet (see `adaptations.md`). Wiring any one is cheap
-once something actually needs it; the facts below are already gathered so that ask stays
-small:
+Everything that was a `LiteParseConfig` field is now wired (2026-09-24 pass, see
+`adaptations.md`). What's left is a different shape entirely, not a field:
 
-- **`ParseResult.images` metadata was itself a gap until 2026-09-24** — now wired, see
-  above. What's *still* unwired on `ExtractedImage`'s neighbors:
-- `extractFormFields`, `extractStructureTree`, `detectScreenshotRects`,
-  `renderFormFields`, `extractTextMetadata` — all exist upstream with a proper
-  `#[serde(default)]`, none are exposed from `Config.php`. A new page-level field goes
-  through the **allowlisted page field** pattern (`page_to_json` in
-  `rust/src/ffi/result.rs`) — no longer "free, via full-struct serialize" (that pattern
-  stopped being accurate the moment `page_to_json` became an explicit allowlist; see
-  "Two bugs the 2.14.7 bump surfaced and fixed" below).
-- `extractContentBounds` (`LiteParseConfig.extract_content_bounds`, has
-  `#[serde(default)]`) — **not wired, and `page_to_json`'s existing `content_bounds`
-  allowlist entry is currently dead code**: upstream computes `content_bounds`
-  internally regardless (for the white-fill heuristic under `extract_vector_graphics`),
-  but explicitly zeroes the field back to `None` unless `extract_content_bounds` is
-  `true` (`parser.rs`, `if !self.config.extract_content_bounds { page.content_bounds =
-  None; }`). Wiring the config flag is what makes the already-present allowlist branch
-  reachable — not a new Rust change.
-- `extractXfaPackets` (`LiteParseConfig.extract_xfa_packets`, has `#[serde(default)]`) →
-  `ParseResult.xfa_packets: Option<Vec<XfaPacket>>` (`{index, name?, content_length,
-  content?}` per raw XFA packet) — an envelope field, same pattern as `doc_meta`/`images`.
-  Both fields already existed at `crates-v2.14.3`, not new to the 2.14.7 bump.
-- `creator`/`producer` (`ParseResult.creator: Option<String>`,
-  `ParseResult.producer: Option<String>`) — the PDF `/Info` dict's Creator/Producer
-  strings. Distinct top-level `ParseResult` fields, **not** part of `DocumentMetadata`
-  (verified field-for-field: not among its 13 fields) despite reading like they belong
-  there. Trivial envelope additions; lowest-value of this group.
-- `ScreenshotResult.is_solid_fill: bool` and `ScreenshotResult.rects: Vec<ScreenshotRect>`
-  (gated by `detect_screenshot_rects`) — silently dropped by both
-  `liteparse_parser_screenshot_*` and `liteparse_result_screenshots`; `Screenshot.php`
-  only carries `pageNumber`/`width`/`height`/`bytes`. Wiring `rects` needs both the
-  config flag *and* new C accessors (mirroring `liteparse_screenshot_bytes`) — `rects`
-  never had an accessor path at all, unlike the other gaps here which are one flag away.
 - `ParseSession`/`ParseBatch` (new in 2.14.3) — a batch/streaming parse API for bounded
-  per-batch memory on very large documents. Different API shape, not a `LiteParseConfig`
-  field like the rest of this list. Not adopted; worth it only if a future large-PDF
-  pipeline needs it.
-- `pageOrientationCorrections` (new in 2.14.7, `LiteParseConfig.page_orientation_corrections:
-  Vec<{page, angle}>`) — counter-rotates specific pages by a caller-supplied clockwise
-  angle (0/90/180/270), for a caller that already has an upstream orientation classifier.
-  Has `#[serde(default)]`, not wired. Niche — only worth it if asked for.
+  per-batch memory on very large documents. A different lifecycle (new handle type,
+  streaming iteration), not a config flag or output field like everything wired so far —
+  adopting it means designing a new PHP-facing API shape, not extending an existing one.
+  Not adopted; worth it only if a future large-PDF pipeline needs it.
+
+One documentation trap already hit and fixed while wiring the rest of this list, worth
+remembering for the next one: `page.structure_tree` is **not** shaped like the
+internal, doc-hidden `StructNode` (`{role, mcids, bbox, alt_text}`, used by `struct_nodes`
+— a different, deliberately-unexposed field). It's `Option<StructureTree>`, a real
+recursive tree (`{roots: [{type, id?, actual_text?, alt_text?, title?, attributes?,
+marked_content_ids, children, annotations}, ...]}`) — confirmed by actually running the
+fixture, not by reading the struct name and assuming. `grep`-ing a struct name upstream
+is a hypothesis, not a fact; see step 4 of the skill.
 
 ## The one open bug to re-verify on every future bump
 
@@ -144,7 +122,7 @@ option in `adaptations.md`.
 - `src/LiteParse/*.php` — the PHP surface. `Config.php` mirrors `LiteParseConfig`
   field-for-field; `LiteParseFfi.php` is the raw `\FFI::cdef()` wrapper plus shared
   static helpers (`collectScreenshots`, `consumeOwnedString`, ...). `ExtractedImage.php`
-  is the `images()` VO.
+  is the `images()` VO; `ScreenshotRect.php` is `Screenshot::$rects`' element VO.
 - `src/LiteParse/Layout/*.php` — the typed structured-output layer (`Block`, `BlockKind`,
   `TableCell`) behind `ParseResult::blocks()`/`flatBlocks()`. See
   `docs/adr/0001-typed-blocks-raw-json.md` for why this layer is typed and `json()` stays

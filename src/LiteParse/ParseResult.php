@@ -53,17 +53,40 @@ final class ParseResult
      *         bbox: array{x: float, y: float, width: float, height: float},
      *         width: int, height: int, rotation: float, format: string, duplicate_of?: string
      *     }>,
+     *     xfa_packets: ?list<array{index: int, name?: string, content_length: int, content?: string}>,
+     *     creator: ?string,
+     *     producer: ?string,
      *     pages: list<array{
      *     page_number: int, page_width: float, page_height: float, text: string, markdown?: string,
+     *     content_bounds?: array{x: float, y: float, width: float, height: float},
      *     text_items: list<array{
      *         text: string, x: float, y: float, width: float, height: float, rotation: float,
      *         font_name: ?string, font_size: ?float,
      *         font_height?: float, font_ascent?: float, font_descent?: float,
      *         font_weight?: int, font_flags?: int, text_width?: float,
      *         font_is_buggy?: true, has_unicode_map_error?: true, mcid?: int,
-     *         fill_color?: string, stroke_color?: string, confidence?: float,
-     *         link?: string, strike?: true
+     *         fill_color?: string, stroke_color?: string,
+     *         char_codes?: list<int>, trailing_space_generated?: true,
+     *         confidence?: float, link?: string, strike?: true,
+     *         words?: list<array{text: string, x: float, y: float, width: float, height: float}>
      *     }>,
+     *     form_fields?: list<array{
+     *         id: string, type: string, page: int, annotation_index: int, widget_index: int,
+     *         object_number?: int, name?: string, alternate_name?: string, value?: string,
+     *         export_value?: string, field_flags: int, control_count?: int, control_index?: int,
+     *         checked?: bool, rect?: array{x: float, y: float, width: float, height: float},
+     *         options?: list<string>, selected_options?: list<string>
+     *     }>,
+     *     annotations?: list<array{
+     *         subtype: string, contents?: string, created?: string, modified?: string, title?: string,
+     *         rect?: array{x: float, y: float, width: float, height: float},
+     *         quadpoint_rects?: list<array{x: float, y: float, width: float, height: float}>, uri?: string
+     *     }>,
+     *     structure_tree?: array{roots: list<array{
+     *         type: string, id?: string, actual_text?: string, alt_text?: string, title?: string,
+     *         attributes?: array<string, bool|float|string>, marked_content_ids: list<int>,
+     *         children: list<mixed>, annotations: list<array{subtype: string, contents?: string, created?: string, modified?: string, title?: string, rect?: array{x: float, y: float, width: float, height: float}, quadpoint_rects?: list<array{x: float, y: float, width: float, height: float}>, uri?: string}>
+     *     }>},
      *     complexity?: array{
      *         page_number: int, text_length: int, text_coverage: float,
      *         has_substantial_images: bool, image_block_count: int, image_coverage: float,
@@ -95,7 +118,20 @@ final class ParseResult
      * `bbox` entirely. `doc_meta` is `null` unless `Config::$extractDocumentMetadata` is set.
      * `page_errors` is empty unless `Config::$continueOnPageError` is set. `images` is empty
      * unless `Config::$extractImages` is set, and entries never carry pixel bytes — only
-     * `id`/`path`/`bbox`/dimensions/`format` (see `ParseResult::images()`).
+     * `id`/`path`/`bbox`/dimensions/`format` (see `ParseResult::images()`). `xfa_packets` is
+     * `null` unless `Config::$extractXfaPackets` is set (`[]` for a non-XFA document with the
+     * flag on — that distinguishes "didn't ask" from "asked, found nothing"). `creator`/
+     * `producer` come from the PDF `/Info` dict and are always present when the source document
+     * has them, independent of every other flag — distinct from `doc_meta`, which does not carry
+     * them. `content_bounds` is present per page only when `Config::$extractContentBounds` is set.
+     * `form_fields` is present per page only when `Config::$extractFormFields` is set.
+     * `annotations` is present per page only when `Config::$extractAnnotations` is set.
+     * `structure_tree` is present per page only when `Config::$extractStructureTree` is set —
+     * each element's `children` recurses with the same shape (`type`/`id`/`actual_text`/
+     * `alt_text`/`title`/`attributes`/`marked_content_ids`/`children`/`annotations`), which
+     * PHPStan's array-shape syntax can't express, hence `list<mixed>` above.
+     * `char_codes`/`trailing_space_generated` on a text item need `Config::$extractTextMetadata`;
+     * `words` needs `Config::$emitWordBoxes`.
      */
     public function json(): array
     {

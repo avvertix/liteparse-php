@@ -73,6 +73,43 @@ final class Config
      *                                     `ParseResult::json()`'s top-level `page_errors`.
      *                                     Document-open and document-level failures remain fatal
      *                                     regardless of this setting.
+     * @param  bool  $extractFormFields  Extract AcroForm widget fields and values into each
+     *                                   parsed page's `form_fields` in `ParseResult::json()`.
+     * @param  bool  $extractStructureTree  Extract the tagged-PDF logical structure tree into
+     *                                      each parsed page's `structure_tree` in `ParseResult::json()`.
+     * @param  bool  $extractContentBounds  Attach each page's `content_bounds` (the union bbox of
+     *                                      its top-level content objects) in `ParseResult::json()`.
+     * @param  bool  $extractXfaPackets  Extract raw XFA packets (name + XML content) from XFA form
+     *                                   documents into `ParseResult::json()`'s top-level `xfa_packets`.
+     *                                   `Some([])` for a non-XFA document, not `null` — `null` means
+     *                                   this flag was off.
+     * @param  bool  $extractTextMetadata  Include rich PDF text metadata on every `TextItem` in
+     *                                     `ParseResult::json()`'s `text_items`: MCID, glyph width,
+     *                                     font metrics/weight/buggy state, fill/stroke colors, raw
+     *                                     character codes (`char_codes`), and whether a trailing
+     *                                     space was synthesized by PDFium (`trailing_space_generated`).
+     *                                     Most of these fields are already returned regardless; this
+     *                                     specifically gates `char_codes` and `trailing_space_generated`,
+     *                                     which are otherwise never computed.
+     * @param  bool  $detectScreenshotRects  Detect solid rectangles and thick lines in rendered page
+     *                                       screenshots and attach them to `Screenshot::$rects` — runs
+     *                                       on the raster, so it also finds structure in scanned pages
+     *                                       with no vector paths. Adds a full-bitmap scan per page.
+     * @param  bool  $renderFormFields  Draw AcroForm field appearances (filled values, checkbox
+     *                                  states) into rendered rasters (screenshots and OCR inputs).
+     *                                  Initializes a PDFium form-fill environment and runs the
+     *                                  document's open/JS actions — off by default so a plain parse
+     *                                  never executes document scripts or changes raster bytes for
+     *                                  form-bearing PDFs.
+     * @param  list<array{page: int, angle: int}>  $pageOrientationCorrections  Per-page orientation
+     *                                                                          corrections, e.g. from an upstream orientation
+     *                                                                          classifier that saw the rendered page. Each entry
+     *                                                                          names a 1-based page and the clockwise angle
+     *                                                                          (0/90/180/270) that page's content appears rotated
+     *                                                                          in its viewport; the page is counter-rotated by that
+     *                                                                          angle before extraction, on top of the PDF's own
+     *                                                                          `/Rotate`. Pages not listed, and pages past the end
+     *                                                                          of the document, are left unchanged.
      */
     public function __construct(
         public readonly string $ocrLanguage = 'eng',
@@ -105,6 +142,14 @@ final class Config
         public readonly bool $extractDocumentMetadata = false,
         public readonly bool $extractScreenshots = false,
         public readonly bool $continueOnPageError = false,
+        public readonly bool $extractFormFields = false,
+        public readonly bool $extractStructureTree = false,
+        public readonly bool $extractContentBounds = false,
+        public readonly bool $extractXfaPackets = false,
+        public readonly bool $extractTextMetadata = false,
+        public readonly bool $detectScreenshotRects = false,
+        public readonly bool $renderFormFields = false,
+        public readonly array $pageOrientationCorrections = [],
     ) {}
 
     public function toJson(): string
@@ -140,6 +185,14 @@ final class Config
             'extract_document_metadata' => $this->extractDocumentMetadata,
             'extract_screenshots' => $this->extractScreenshots,
             'continue_on_page_error' => $this->continueOnPageError,
+            'extract_form_fields' => $this->extractFormFields,
+            'extract_structure_tree' => $this->extractStructureTree,
+            'extract_content_bounds' => $this->extractContentBounds,
+            'extract_xfa_packets' => $this->extractXfaPackets,
+            'extract_text_metadata' => $this->extractTextMetadata,
+            'detect_screenshot_rects' => $this->detectScreenshotRects,
+            'render_form_fields' => $this->renderFormFields,
+            'page_orientation_corrections' => $this->pageOrientationCorrections,
         ], JSON_THROW_ON_ERROR);
     }
 }

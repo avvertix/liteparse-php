@@ -552,3 +552,68 @@ Verified: `cargo build --release` clean, `composer test` 25/25 (5 new tests in
 matches `blocks()`'s grouping exactly, and that `images()` correctly reports the fixture's second
 image as `duplicateOf` the first (same embedded logo referenced from both pages) rather than a
 distinct entry — upstream dedup behavior, not a binding bug.
+
+## Wiring every remaining `LiteParseConfig` field (2026-09-24)
+
+Immediate follow-up to the blocks/images pass: "take all additional fields and capabilities and
+include them." Scope was every item still in `HANDOFF.md`'s "Known gaps" list except
+`ParseSession`/`ParseBatch` (a different API shape — a batch/streaming parser lifecycle, not a
+config flag or output field like the rest of the list — called out separately rather than folded
+in silently). Concretely: `extractFormFields`, `extractStructureTree`, `extractContentBounds`,
+`extractXfaPackets`, `extractTextMetadata`, `detectScreenshotRects`, `renderFormFields`,
+`pageOrientationCorrections`, plus the already-scoped `xfa_packets`/`creator`/`producer`/
+`content_bounds`/screenshot `rects`/`is_solid_fill` fields those flags unlock.
+
+Wiring pattern per field, all following patterns already established by the skill:
+
+- **`extractFormFields`/`extractStructureTree`/`extractContentBounds` needed zero Rust changes.**
+  `page_to_json`'s allowlist already had `form_fields`/`structure_tree`/`content_bounds` branches
+  from earlier sessions — they were simply unreachable because no config flag ever set the
+  upstream field to non-`None`. Wiring the three `Config.php` flags alone made all three live.
+- **`extractXfaPackets` and `creator`/`producer`** — new envelope fields in `liteparse_result_json`,
+  same pattern as `doc_meta`/`images`. `creator`/`producer` need no config flag at all — they're
+  unconditional top-level `ParseResult` fields (the PDF `/Info` dict's entries), present whenever
+  the source document has them.
+- **`extractTextMetadata`** needed zero Rust changes for a different reason than the first group:
+  `page_to_json` already serializes `&page.text_items` wholesale (`TextItem`'s own `Serialize`
+  derive, not an allowlist — unlike `ParsedPage` itself), so `char_codes`/`trailing_space_generated`
+  reach PHP automatically the moment upstream populates them. Only `Config.php`'s flag and the
+  `ParseResult::json()` docblock needed updating. Same reasoning retroactively explained why
+  `words` (`Config::$emitWordBoxes`) was already reaching PHP correctly despite never being
+  documented — fixed that docblock gap in the same pass.
+- **`detectScreenshotRects`/`is_solid_fill`** needed real new Rust: two accessors,
+  `liteparse_screenshot_is_solid_fill` (returns `bool` directly — confirmed cbindgen already
+  emits `#include <stdbool.h>` in the generated header despite no prior function using it) and
+  `liteparse_screenshot_rects_json` (a JSON-string accessor, matching the existing small-struct
+  pattern rather than building a second nested handle type for a handful of rects per screenshot).
+  `Screenshot.php` gained `isSolidFill`/`rects` properties and a new `ScreenshotRect` VO;
+  `is_solid_fill` needed no config flag (always computed upstream), `rects` needs
+  `detectScreenshotRects`.
+- **`renderFormFields`/`pageOrientationCorrections`** are pure config inputs with no new output
+  shape — they change existing raster bytes / text-item coordinates, not what gets returned.
+  Config.php flags only.
+
+One real mistake caught by testing rather than assumed correct from reading: the original plan
+(and first docblock draft) assumed `page.structure_tree` was shaped like the internal, doc-hidden
+`StructNode` type (`{role, mcids, bbox, alt_text}`) found by grepping `types.rs` for a
+plausible-sounding struct name. Running the fixture with `extractStructureTree: true` produced a
+completely different, recursive shape — `StructNode` backs the *different*, deliberately-internal
+`struct_nodes` field; `structure_tree` is actually `Option<StructureTree>`
+(`{roots: [{type, id?, actual_text?, alt_text?, title?, attributes?, marked_content_ids, children,
+annotations}, ...]}`, `children` recursing). Caught immediately because `ExtendedFieldsTest`
+asserted against real output rather than the assumed shape, failed, and the actual JSON was
+inspected directly (`var_export`) to correct it — the exact discipline the skill's step 4 already
+calls out for markdown/table classification, evidently generalizes to *any* field whose shape
+wasn't independently confirmed by running the parser.
+
+Verified: `cargo build --release` clean, new symbols confirmed present in the regenerated
+`include/liteparse_php.h`, `composer test` 34/34 (9 new tests in
+`tests/Integration/ExtendedFieldsTest.php`), `composer lint` clean, plus a scratch smoke test
+exercising every new flag together against the fixture: `content_bounds` populated with real
+coordinates, `form_fields`/`structure_tree` present as page keys (structure tree non-trivial —
+the fixture is a tagged PDF), `char_codes`/`trailing_space_generated` gated correctly (present only
+with the flag on, `trailing_space_generated` correctly omitted rather than `false` per its
+`skip_serializing_if`), `xfa_packets` correctly `null` off / `[]` on for this non-XFA fixture,
+`creator`/`producer` present unconditionally (`"Typst 0.14.2"` / `null` for this fixture), and
+`is_solid_fill`/`rects` populated identically through both `screenshots()` and the standalone
+`screenshotFile()` path.

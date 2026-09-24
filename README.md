@@ -91,7 +91,7 @@ With `Config::$extractImages` (and optionally `imageOutputDir`) on, `ParseResult
 
 - **`LiteParse::parseFile()` / `parseBytes()`** — parse from a file path or an in-memory buffer (e.g. a PDF downloaded over the network).
 - **`LiteParse::isComplexFile()` / `isComplexBytes()`** — a cheap per-page pre-check (no OCR, no rendering) reporting whether each page looks scanned, sparse, garbled, or image-heavy — useful for deciding whether a document needs OCR before committing to a full parse.
-- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes. With `Config::$extractScreenshots` on, `ParseResult::screenshots()` returns the same pages' PNGs from the parse that already happened, instead of rendering a second time.
+- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes. With `Config::$extractScreenshots` on, `ParseResult::screenshots()` returns the same pages' PNGs from the parse that already happened, instead of rendering a second time. Every `Screenshot` also carries `isSolidFill` (blank-page detection, always computed) and `rects` (solid rectangles/lines detected in the raster, needs `Config::$detectScreenshotRects`).
 - **`ParseResult::search()`** — search already-parsed text for phrase matches, with bounding boxes, merged across text items that were split mid-phrase.
 
 ```php
@@ -149,6 +149,14 @@ See [`examples/`](./examples/) for runnable scripts.
 | `extractDocumentMetadata` | `false` | Populate `json()`'s top-level `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) |
 | `extractScreenshots` | `false` | Render every page to PNG during `parseFile()`/`parseBytes()`, available via `ParseResult::screenshots()` |
 | `continueOnPageError` | `false` | Continue past a page-level extraction failure instead of aborting the parse; failures land in `json()`'s top-level `page_errors` |
+| `extractFormFields` | `false` | Attach each page's AcroForm widget fields/values to `json()`'s per-page `form_fields` |
+| `extractStructureTree` | `false` | Attach each page's tagged-PDF logical structure tree to `json()`'s per-page `structure_tree` |
+| `extractContentBounds` | `false` | Attach each page's `content_bounds` (union bbox of its top-level content) to `json()` |
+| `extractXfaPackets` | `false` | Extract raw XFA packets from XFA form documents into `json()`'s top-level `xfa_packets` |
+| `extractTextMetadata` | `false` | Include `char_codes`/`trailing_space_generated` on every text item in `json()` |
+| `detectScreenshotRects` | `false` | Detect solid rectangles/lines in rendered screenshots, on `Screenshot::$rects` (full-bitmap scan per page) |
+| `renderFormFields` | `false` | Draw AcroForm field appearances into rendered rasters — initializes a PDFium form-fill environment and runs the document's open/JS actions |
+| `pageOrientationCorrections` | `[]` | `[['page' => 1, 'angle' => 90], ...]` — counter-rotate specific pages by a caller-supplied clockwise angle (0/90/180/270) |
 
 ## How it works
 
