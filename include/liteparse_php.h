@@ -102,10 +102,20 @@ struct ResultHandle *liteparse_parser_parse_bytes(const struct ParserHandle *han
  * backs the `lit` CLI's `--format json` and intentionally drops most
  * `TextItem` fields (font size, fill/stroke color, rotation, links,
  * strikethrough, ...) down to a lean `{text, x, y, width, height,
- * font_name, font_size, confidence}` shape. `ParsedPage` and `TextItem`
- * already derive `Serialize` directly (with internal-only fields marked
- * `#[serde(skip)]`), so serializing `data.result.pages` as-is gives the PHP
- * side every field liteparse extracts per text item, at no extra cost.
+ * font_name, font_size, confidence}` shape, and we want the richer one.
+ *
+ * Builds its own per-page view (`page_to_json`) rather than serializing
+ * `ParsedPage` as-is. `ParsedPage` carries several fields liteparse
+ * considers internal (`projected_lines`, `regions`, `graphics`, `figures`,
+ * `struct_nodes`, `image_refs`, ...) that used to be unconditionally
+ * `#[serde(skip)]`; as of the 2.14.7 upgrade several of those switched to
+ * `skip_serializing_if`, meaning a naive `&data.result.pages` serialize
+ * would have started silently leaking them into every `json()` response
+ * (upstream's own `format_json` is unaffected — it already builds its own
+ * view struct field-by-field, same idea as here). Allowlisting fields here
+ * means any future "internal field no longer skipped" upstream change is
+ * inert for us instead of a silent payload/output-shape regression: a new
+ * field only reaches PHP once someone deliberately adds it below.
  *
  * Also includes the `ParseResult`-level fields that don't live on a page:
  * `total_pages` (source page count before `max_pages`/`target_pages`
@@ -135,11 +145,13 @@ char *liteparse_result_json(const struct ResultHandle *handle);
  * `TextItem`s that merged into it, so per-run font/color/text survives even
  * where `line.text` concatenates multiple items).
  *
- * `ProjectedLine` already derives `Serialize` and is a public field on
- * `ParsedPage` — `#[serde(skip)]` there only suppresses it from
- * `ParsedPage`'s own derive, it doesn't stop us serializing it directly, same
- * bypass as `liteparse_result_json`. Returns NULL on error. Free the result
- * with `liteparse_string_free`.
+ * `ProjectedLine` already derives `Serialize`. `ParsedPage.projected_lines`
+ * itself carries `#[serde(skip_serializing_if = "Vec::is_empty")]` (nothing
+ * stronger), but that attribute only matters when serializing a `ParsedPage`
+ * value directly — accessing `&page.projected_lines` and serializing that
+ * `Vec<ProjectedLine>` on its own, as this function does, was never affected
+ * by it either way. Returns NULL on error. Free the result with
+ * `liteparse_string_free`.
  *
  * # Safety
  * `handle` must be a valid, non-null pointer returned by a
@@ -161,6 +173,22 @@ char *liteparse_result_text(const struct ResultHandle *handle);
  * Render the parsed document as Markdown, reconstructing headings, lists,
  * tables and figure references from the spatial layout. Free the result
  * with `liteparse_string_free`.
+ *
+ * liteparse 2.14.7 removed the single-call `output::markdown::format_markdown`
+ * this used to delegate to, in favor of composable per-page stage functions
+ * (`stages::document_signals`/`extract_blocks`/`render_page_markdown`) —
+ * `parse()` itself now only runs them when `output_format == Markdown`, so
+ * there is no longer a document-level convenience wrapper to call after the
+ * fact. This reconstructs it here so `markdown()` keeps working regardless
+ * of what `output_format` the parser was configured with, same as before.
+ *
+ * This also fixes a latent bug: the old `format_markdown(pages, outline,
+ * image_mode)` call this replaced took no `keep_headers_footers` parameter
+ * at all — it always rendered with chrome suppression on, silently ignoring
+ * `Config::$keepHeadersFooters` — because the config-aware call was a
+ * different, four-argument function (`format_markdown_pages`) this never
+ * called. `keep_headers_footers` is threaded through correctly now, cached
+ * on `ResultData` at parse time alongside `image_mode` for the same reason.
  *
  * # Safety
  * `handle` must be a valid, non-null pointer returned by a

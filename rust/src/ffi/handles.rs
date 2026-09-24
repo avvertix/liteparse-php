@@ -31,6 +31,13 @@ pub struct ParserData {
 pub struct ResultData {
     pub result: ParseResult,
     pub image_mode: ImageMode,
+    /// Cached from the parser's config at parse time, same reason as
+    /// `image_mode`: `liteparse_result_markdown` renders on demand, long
+    /// after the `LiteParseConfig` itself is gone, using liteparse's public
+    /// per-page stage functions (`stages::document_signals`/`extract_blocks`/
+    /// `render_page_markdown`), which take it as an explicit `BlockOptions`
+    /// field rather than reading it from anywhere implicit.
+    pub keep_headers_footers: bool,
 }
 
 pub struct ScreenshotListData {
