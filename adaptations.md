@@ -463,3 +463,92 @@ serialized wholesale) as things a clean build does not rule out, and step 5's "f
 serialize" pattern was rewritten to "allowlisted page field," since wholesale serialization is
 exactly what caused bug #2 — the old pattern description was actively wrong advice for a future
 upgrade to follow.
+
+## API-surface audit and `Layout\Block`/`images()` (2026-09-24)
+
+Asked "what new fields were added [since the very first version pin], which matter for
+benchmarking" as a follow-up to the 2.14.7 upgrade. Answering it properly required re-walking
+`ParseResult`/`LiteParseConfig`/`ParsedPage` in the sibling checkout field-by-field against what
+`Config.php`/`ParseResult.php`/`rust/src/ffi/result.rs` actually wire, rather than trusting the
+"Known gaps" list `HANDOFF.md` already had — which turned out to be itself incomplete. Confirmed
+sibling checkout HEAD (`b754dc3`, `wasm-v2.14.7`/`node-v2.14.7` tags) has zero commits touching
+`crates/liteparse/src` since `crates-v2.14.7` (`git log --oneline crates-v2.14.7..HEAD --
+crates/liteparse/src` → empty), so diffing against it is equivalent to diffing against the actual
+pin.
+
+Found five real gaps beyond `HANDOFF.md`'s existing list, three of them present since
+`crates-v2.14.3` and missed by that upgrade's own audit (confirmed via
+`git show crates-v2.14.3:crates/liteparse/src/config.rs`):
+
+1. **`ParseResult.images` had zero accessor.** `extractImages`/`imageOutputDir` were wired as
+   *config inputs* since the very first session, but the resulting `ExtractedImage` metadata
+   (`id`, `name`, `path`, `page`, `bbox`, `width`, `height`, `rotation`, `format`, `duplicate_of` —
+   everything except `bytes`, which upstream marks `#[serde(skip)]` on purpose, "an image payload
+   crossing a boundary goes as a file or a separate blob, keyed by `id`") was never returned. A
+   caller turning on `extractImages` got files on disk with no manifest of what was written where.
+2. **`extractContentBounds` unwired, and `page_to_json`'s existing `content_bounds` allowlist
+   branch was dead code.** Upstream computes `content_bounds` internally regardless (needed for the
+   white-fill heuristic under `extract_vector_graphics`), then explicitly zeroes it back to `None`
+   unless `extract_content_bounds` is `true` (`parser.rs`: `if !self.config.extract_content_bounds
+   { page.content_bounds = None; }`). Present at `crates-v2.14.3` already.
+3. **`extractXfaPackets` → `ParseResult.xfa_packets`** entirely missing from both the binding and
+   `HANDOFF.md`'s gap list. Present at `crates-v2.14.3` already.
+4. **`creator`/`producer`** — top-level `ParseResult` fields (the PDF `/Info` dict's
+   Creator/Producer), confirmed *not* part of `DocumentMetadata` (checked field-for-field, 13
+   fields, no overlap) despite reading like they belong there.
+5. **`ScreenshotResult.is_solid_fill`/`rects`** dropped by both the standalone
+   `liteparse_parser_screenshot_*` calls and the newer `liteparse_result_screenshots` — confirmed
+   via `grep` across `rust/src`, zero matches for either field. `rects` (gated by
+   `detect_screenshot_rects`) never had an accessor path at all, unlike the others here.
+
+Ran a `/grilling` session (via the `mattpocock-skills` plugin's `grill-with-docs` → `grilling` +
+`domain-modeling` skills) to decide how to wire these into the public API, anchored on a concrete
+consumer which today calls `parseFile()->markdown()` and re-parses the Markdown through CommonMark
+to rebuild its own `Page`/`Block` tree. Full transcript of the decisions is in the conversation;
+summary of what shipped:
+
+- **Scope**: `liteparse-php` only. The `onlytext-cloud` rewrite to actually consume the new API is
+  a deliberate follow-up, not part of this pass.
+- **`ParseResult::blocks(): array<array{page_number: int, blocks: Block[]}>`** and
+  **`ParseResult::flatBlocks(): Block[]`** — the recommended path for structure-aware consumers,
+  positioned in the README ahead of the markdown-re-parse pattern. `blocks()` groups by page
+  (the shape existing `json()['pages'][]['blocks']` users already expect); `flatBlocks()` returns
+  one reading-order list per document, every `Block` still carrying its own `$pageNumber` — added
+  because Parxy's own `Page.php` docblock says the team is deliberately moving *away* from
+  Page-wrapped blocks toward a flat block stream with per-block `Location`, so the flat shape
+  should already exist rather than being something every consumer re-derives. Both are decided as
+  an explicit *second* method, not a flag on `blocks()` — page-grouped stays the default so
+  existing-pattern users aren't surprised. Both are pure PHP on top of the existing
+  `jsonString()`/`extractBlocks` output; no Rust change needed.
+- **`Layout\Block`** — one flat class discriminated by a `BlockKind` backed enum (consistent with
+  `OutputFormat`/`ImageMode`'s existing pattern in `Config.php`), mirroring upstream's own
+  `LayoutBlock` shape rather than a subclass-per-kind hierarchy — deliberately *not*
+  over-engineered per direct instruction mid-session. `bbox` stays a raw
+  `array{x,y,width,height}` on `Block` rather than a wrapper VO, for the same reason, and because
+  this package has no business picking a bbox convention on a downstream consumer's behalf (Parxy's
+  own `BoundingBox` is `{x0,y0,x1,y1}`, bottom-left origin — a different shape entirely; conversion
+  is the consumer's job).
+- **`ParseResult::images(): ExtractedImage[]`** — kept separate from `Block` rather than merged
+  onto `figure` blocks (same "don't bloat `Block` with fields only one kind uses" reasoning), joined
+  by the `id`/`format` a figure block already carries. This one needed a real Rust change: folded
+  `"images": &data.result.images` into `liteparse_result_json`'s envelope, same pattern as
+  `doc_meta`/`page_errors`. No new config flag — `extractImages` already gated it upstream.
+- **Parked deliberately**: `xfa_packets`, `extractContentBounds`, `creator`/`producer`, and
+  screenshot `rects`/`is_solid_fill` — real gaps, fully documented in `HANDOFF.md` with exact
+  upstream shapes and gating, but with no concrete consumer driving their shape yet ("we only have
+  one clear use case" — the same over-engineering concern that shaped `Block`/`bbox` above, applied
+  to the whole gap list rather than just one class).
+- **`docs/adr/0001-typed-blocks-raw-json.md`** — records *why* only the blocks layer got typed VOs
+  and `json()`/`lines()`/`search()` stayed raw arrays (a full VO layer over `json()` would mean
+  maintaining a parallel class hierarchy in lockstep with every upstream bump, for fields most
+  consumers only read a handful of; the blocks layer is the one place that cost is worth paying,
+  confirmed by the Parxy case doing exactly that mapping by hand already).
+- **`CONTEXT.md`** created (first use in this repo) — defines `Block`, `structured output`,
+  `page-grouped blocks`, `flat blocks` as the package's public-API vocabulary.
+
+Verified: `cargo build --release` clean, `composer test` 25/25 (5 new tests in
+`tests/Integration/LayoutTest.php`), `composer lint` clean, plus a scratch smoke test against
+`tests/fixtures/pdf-headings-images-tables.pdf` confirming `flatBlocks()`'s page-number tagging
+matches `blocks()`'s grouping exactly, and that `images()` correctly reports the fixture's second
+image as `duplicateOf` the first (same embedded logo referenced from both pages) rather than a
+distinct entry — upstream dedup behavior, not a binding bug.

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LiteParse;
 
 use FFI\CData;
+use LiteParse\Layout\Block;
 
 /**
  * A parsed document. Each accessor renders on demand from the underlying
@@ -47,6 +48,11 @@ final class ParseResult
      *         signature_byte_range_reaches_eof?: bool
      *     },
      *     page_errors: list<array{page: int, message: string}>,
+     *     images: list<array{
+     *         id: string, name: string, path?: string, page: int,
+     *         bbox: array{x: float, y: float, width: float, height: float},
+     *         width: int, height: int, rotation: float, format: string, duplicate_of?: string
+     *     }>,
      *     pages: list<array{
      *     page_number: int, page_width: float, page_height: float, text: string, markdown?: string,
      *     text_items: list<array{
@@ -87,7 +93,9 @@ final class ParseResult
      * `blocks` is present per page only when `Config::$extractBlocks` is set — `bbox` on each block
      * is the union of every source line that fed it; a block with no page geometry behind it omits
      * `bbox` entirely. `doc_meta` is `null` unless `Config::$extractDocumentMetadata` is set.
-     * `page_errors` is empty unless `Config::$continueOnPageError` is set.
+     * `page_errors` is empty unless `Config::$continueOnPageError` is set. `images` is empty
+     * unless `Config::$extractImages` is set, and entries never carry pixel bytes — only
+     * `id`/`path`/`bbox`/dimensions/`format` (see `ParseResult::images()`).
      */
     public function json(): array
     {
@@ -99,6 +107,62 @@ final class ParseResult
         return LiteParseFfi::consumeOwnedString(
             LiteParseFfi::instance()->liteparse_result_json($this->handle),
             'ParseResult::json'
+        );
+    }
+
+    /**
+     * This result's classified layout blocks (headings, paragraphs, lists, tables, figures,
+     * ...), grouped under the page they came from — the recommended way to build your own
+     * document/page model, since each block carries a bounding box and structured
+     * kind-specific fields instead of markdown syntax to be re-parsed. Requires
+     * `Config::$extractBlocks`; empty per page otherwise.
+     *
+     * For a single reading-order list across the whole document instead of grouped by page,
+     * see `flatBlocks()`.
+     *
+     * @return list<array{page_number: int, blocks: list<Block>}>
+     */
+    public function blocks(): array
+    {
+        return array_map(
+            static fn (array $page): array => [
+                'page_number' => $page['page_number'],
+                'blocks' => array_map(
+                    static fn (array $block): Block => Block::fromArray($block, $page['page_number']),
+                    $page['blocks'] ?? [],
+                ),
+            ],
+            $this->json()['pages'],
+        );
+    }
+
+    /**
+     * Every `Block` in the document as one reading-order list, each carrying its own
+     * `Block::$pageNumber` — for a document model that isn't organized by page. Built from
+     * `blocks()`; requires `Config::$extractBlocks`.
+     *
+     * @return list<Block>
+     */
+    public function flatBlocks(): array
+    {
+        return array_merge([], ...array_map(
+            static fn (array $page): array => $page['blocks'],
+            $this->blocks(),
+        ));
+    }
+
+    /**
+     * Metadata for this result's extracted embedded images. Requires
+     * `Config::$extractImages`; empty otherwise. Never carries pixel bytes — read `$path`
+     * (with `Config::$imageOutputDir` set), or join against a `figure` block's `$id`.
+     *
+     * @return list<ExtractedImage>
+     */
+    public function images(): array
+    {
+        return array_map(
+            ExtractedImage::fromArray(...),
+            $this->json()['images'] ?? [],
         );
     }
 

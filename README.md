@@ -50,11 +50,42 @@ echo json_encode($result->lines());  // structured per-page projected lines: mer
 
 `lines()` sits between `json()` and `markdown()`: each entry is a merged visual line (one or more `TextItem`s sharing a baseline) carrying its own bounding box, dominant font/style, and `region_path` — the xy-cut column/region position `liteparse` uses internally to group paragraphs and tables. Each line's `spans` field keeps the original `TextItem`s that merged into it, so per-run font/color survives even where the line's own `text` concatenates multiple items. Unlike `markdown()`, nothing here is reformatted or dropped when the heuristic table/heading detection misfires — you get the raw geometry and can reconstruct rows/columns/headings yourself from `region_path` and bbox positions. There is no heading/paragraph/list "role" label at this layer.
 
-With `Config::$extractBlocks` on, `json()` also attaches a per-page `blocks` array: the same classified heading/paragraph/list/table/figure decomposition `markdown()` renders from, exposed as data with a bounding box on every block (the union of every source line that fed it) — including a bbox on every table cell. Independent of `outputFormat`; enabling it never changes the rendered Markdown.
-
 With `Config::$extractDocumentMetadata` and `Config::$continueOnPageError` on, `json()`'s top level also carries `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) and `page_errors` (page-level extraction failures that didn't abort the parse); `total_pages` (source page count before `maxPages`/`targetPages` truncation) is always present.
 
-Every `ParseResult` accessor (`text()`, `markdown()`, `json()`, `lines()`) renders on demand from the same underlying parsed pages.
+Every `ParseResult` accessor (`text()`, `markdown()`, `json()`, `lines()`, `blocks()`, `flatBlocks()`, `images()`) renders on demand from the same underlying parsed pages.
+
+### Building your own document model: `blocks()` over `markdown()`
+
+`markdown()` reconstructs headings/lists/tables/figure references as rendered text — meant for humans, LLM prompts, or diffing, not for parsing back into a structure. Re-parsing it loses the bounding boxes `liteparse` already computed, and stands a text convention (like a `-----` thematic break for page breaks) in for real document structure.
+
+If you're building your own page/block/document model — the actual reason most integrations touch `markdown()` — start from `Config::$extractBlocks` and `ParseResult::blocks()`/`flatBlocks()` instead:
+
+```php
+use LiteParse\Config;
+use LiteParse\LiteParse;
+use LiteParse\Layout\BlockKind;
+
+$parser = new LiteParse(new Config(extractBlocks: true));
+$result = $parser->parseFile('/path/to/document.pdf');
+
+// Grouped by page — the default, familiar shape:
+foreach ($result->blocks() as $page) {
+    foreach ($page['blocks'] as $block) {
+        if ($block->kind === BlockKind::Heading) {
+            echo str_repeat('#', $block->level ?? 1)." {$block->text}\n";
+        }
+    }
+}
+
+// Or flattened across the whole document, each block still tagged with its own page:
+foreach ($result->flatBlocks() as $block) {
+    printf("p%d %s: %s\n", $block->pageNumber, $block->kind->value, $block->text ?? '');
+}
+```
+
+Each `Block` carries a `bbox` (the union of every source line that fed it — including a bbox on every table cell), reading order matching what `markdown()` renders, and kind-specific fields (`level`/`ordered`/`marker` for lists, `header`/`rows` for tables, `id`/`format` for figures — join a figure block's `id` against `ParseResult::images()` to get its extracted file). See [`Block`](./src/LiteParse/Layout/Block.php) for the full field list. Independent of `outputFormat`; enabling `extractBlocks` never changes the rendered Markdown.
+
+With `Config::$extractImages` (and optionally `imageOutputDir`) on, `ParseResult::images()` returns each embedded image's metadata — `id`, `path` (when written to disk), `bbox`, dimensions, `format`, and `duplicateOf` for repeated images (e.g. a logo reused across pages) — never pixel bytes.
 
 ## Features
 
@@ -103,7 +134,7 @@ See [`examples/`](./examples/) for runnable scripts.
 | `numWorkers` | `1` | Concurrent OCR requests to the HTTP server |
 | `imageMode` | `ImageMode::Placeholder` | Affects `markdown()` image references only |
 | `extractLinks` | `true` | Hyperlinks as `[text](url)` in markdown |
-| `extractImages` | `false` | Extract embedded image bytes/metadata into `ParseResult.images` |
+| `extractImages` | `false` | Extract embedded image metadata into `ParseResult::images()` (never pixel bytes) |
 | `imageOutputDir` | `null` | Directory where extracted embedded images are written; requires `extractImages` |
 | `extractAnnotations` | `false` | Extract all PDF annotations into each parsed page |
 | `cropBox` | `null` | Restrict output to a sub-region of every page: `['top' => ..., 'right' => ..., 'bottom' => ..., 'left' => ...]` fractions |
@@ -114,7 +145,7 @@ See [`examples/`](./examples/) for runnable scripts.
 | `includeComplexity` | `false` | Attach a `complexity` object (text/image coverage, OCR reasons, layout signals) to each page in `json()` |
 | `keepHeadersFooters` | `false` | Keep running headers/footers in `markdown()` instead of stripping them |
 | `extractVectorGraphics` | `false` | Expose page-scoped vector path data (shapes, merged lines) in parse results |
-| `extractBlocks` | `false` | Attach a `blocks` array (headings, paragraphs, tables with per-cell boxes, figures, ...) with bounding boxes to each page in `json()` |
+| `extractBlocks` | `false` | Populate `ParseResult::blocks()`/`flatBlocks()` (and `json()`'s per-page `blocks`) — the recommended way to build your own document model, see [above](#building-your-own-document-model-blocks-over-markdown) |
 | `extractDocumentMetadata` | `false` | Populate `json()`'s top-level `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) |
 | `extractScreenshots` | `false` | Render every page to PNG during `parseFile()`/`parseBytes()`, available via `ParseResult::screenshots()` |
 | `continueOnPageError` | `false` | Continue past a page-level extraction failure instead of aborting the parse; failures land in `json()`'s top-level `page_errors` |

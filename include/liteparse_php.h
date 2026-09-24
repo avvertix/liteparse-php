@@ -120,10 +120,14 @@ struct ResultHandle *liteparse_parser_parse_bytes(const struct ParserHandle *han
  * Also includes the `ParseResult`-level fields that don't live on a page:
  * `total_pages` (source page count before `max_pages`/`target_pages`
  * truncation), `doc_meta` (present when `extract_document_metadata` is on,
- * `null` otherwise), and `page_errors` (populated when
- * `continue_on_page_error` is on, empty otherwise). Page screenshots are
- * deliberately not folded in here — PNG bytes would have to go through
- * base64 — see `liteparse_result_screenshots` instead.
+ * `null` otherwise), `page_errors` (populated when `continue_on_page_error`
+ * is on, empty otherwise), and `images` (populated when `extract_images` is
+ * on, empty otherwise — `ExtractedImage.bytes` is `#[serde(skip)]` upstream,
+ * so this is metadata only: `id`/`format` match the `img_{id}.{format}`
+ * reference `markdown()` and `blocks` emit, `path` is where the bytes were
+ * written when `image_output_dir` is set). Page screenshots are deliberately
+ * not folded in here — PNG bytes would have to go through base64 — see
+ * `liteparse_result_screenshots` instead.
  *
  * Returns NULL on error (rare — JSON formatting of already-parsed data does
  * not normally fail). Free the result with `liteparse_string_free`.
