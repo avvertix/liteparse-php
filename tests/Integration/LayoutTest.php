@@ -98,4 +98,34 @@ final class LayoutTest extends TestCase
 
         $this->assertSame([], $result->images());
     }
+
+    public function test_images_writes_to_output_dir_and_deduplicates_a_visually_identical_repeat(): void
+    {
+        // The fixture embeds the same logo image on both page 1 and page 2 — visually
+        // identical, but embedded as two separate PDF image objects. liteparse dedupes by
+        // content, not by object identity: only the first occurrence gets its own file, and
+        // every later occurrence points back at it via `duplicateOf`.
+        $outputDir = sys_get_temp_dir().'/liteparse-php-test-images-'.bin2hex(random_bytes(4));
+
+        $parser = new LiteParse(new Config(extractImages: true, imageOutputDir: $outputDir, quiet: true));
+        $result = $parser->parseFile($this->fixturesDir.'/pdf-headings-images-tables.pdf');
+        $images = $result->images();
+
+        $this->assertCount(2, $images);
+        [$first, $second] = $images;
+
+        $this->assertSame(1, $first->page);
+        $this->assertNull($first->duplicateOf);
+        $this->assertSame(2, $second->page);
+        $this->assertSame($first->id, $second->duplicateOf);
+
+        // Both entries resolve to the same physical file — one write, not two.
+        $this->assertNotNull($first->path);
+        $this->assertSame($first->path, $second->path);
+        $this->assertFileExists($first->path);
+        $this->assertCount(1, glob($outputDir.'/*'));
+
+        array_map('unlink', glob($outputDir.'/*'));
+        rmdir($outputDir);
+    }
 }
