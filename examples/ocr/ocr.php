@@ -24,6 +24,7 @@
 require __DIR__.'/../common.php';
 
 use LiteParse\Config;
+use LiteParse\Exception\LiteParseException;
 use LiteParse\LiteParse;
 
 $outputDir = __DIR__.'/output';
@@ -46,7 +47,7 @@ echo "Saved: ocr/output/source-page.png ({$screenshot->width}x{$screenshot->heig
 $withoutOcr = new LiteParse(new Config);
 $plainResult = $withoutOcr->parseFile($imagePath);
 $plainPageText = trim($plainResult->json()['pages'][0]['text']);
-echo "Without OCR, page text: ".($plainPageText === '' ? '(empty — no native text layer on a bare image)' : $plainPageText)."\n\n";
+echo 'Without OCR, page text: '.($plainPageText === '' ? '(empty — no native text layer on a bare image)' : $plainPageText)."\n\n";
 
 // 3. Parse the same image again with OCR pointed at the EasyOCR server. Setting
 //    ocrServerUrl alone is enough — it implies ocrEnabled: true as a convenience.
@@ -59,7 +60,7 @@ try {
     $start = microtime(true);
     $ocrResult = $withOcr->parseFile($imagePath);
     $elapsed = microtime(true) - $start;
-} catch (\LiteParse\Exception\LiteParseException $e) {
+} catch (LiteParseException $e) {
     fwrite(STDERR, "OCR request failed: {$e->getMessage()}\n");
     fwrite(STDERR, "Is the EasyOCR server running? Try: docker compose up -d easyocr\n");
     exit(1);
