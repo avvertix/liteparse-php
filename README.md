@@ -6,7 +6,7 @@ Given a PDF this package extracts text with bounding boxes and renders it as str
 
 
 > [!NOTE]
-> The native bindings are tested only for PDF files. Support for DOC/DOCX/XLS/XLSX/PPT/PPTX, and images is not tested and not provided so far.
+> Only PDF and image files are supported. Support for Office documents (DOCX/XLSX/PPTX) is untested and not planned.
 
 
 ## Requirements
@@ -25,6 +25,8 @@ vendor/bin/liteparse-php install
 ```
 
 `install` downloads the compiled `liteparse_php` library and its PDFium dependency for your platform from the package's GitHub Releases into `vendor/avvertix/liteparse-php/lib/`. The specific installed versions are recorded in a `natives.lock` file in the root of your project, commit this alongside `composer.lock` to install the same version of the compiled binary. Run `vendor/bin/liteparse-php update` after upgrading the package to fetch the matching native library.
+
+Upgrading from an earlier version? See [`UPGRADE.md`](./UPGRADE.md) for what changed and what needs attention.
 
 
 
@@ -50,17 +52,77 @@ echo json_encode($result->lines());  // structured per-page projected lines: mer
 
 `lines()` sits between `json()` and `markdown()`: each entry is a merged visual line (one or more `TextItem`s sharing a baseline) carrying its own bounding box, dominant font/style, and `region_path` — the xy-cut column/region position `liteparse` uses internally to group paragraphs and tables. Each line's `spans` field keeps the original `TextItem`s that merged into it, so per-run font/color survives even where the line's own `text` concatenates multiple items. Unlike `markdown()`, nothing here is reformatted or dropped when the heuristic table/heading detection misfires — you get the raw geometry and can reconstruct rows/columns/headings yourself from `region_path` and bbox positions. There is no heading/paragraph/list "role" label at this layer.
 
-With `Config::$extractBlocks` on, `json()` also attaches a per-page `blocks` array: the same classified heading/paragraph/list/table/figure decomposition `markdown()` renders from, exposed as data with a bounding box on every block (the union of every source line that fed it) — including a bbox on every table cell. Independent of `outputFormat`; enabling it never changes the rendered Markdown.
-
 With `Config::$extractDocumentMetadata` and `Config::$continueOnPageError` on, `json()`'s top level also carries `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) and `page_errors` (page-level extraction failures that didn't abort the parse); `total_pages` (source page count before `maxPages`/`targetPages` truncation) is always present.
 
-Every `ParseResult` accessor (`text()`, `markdown()`, `json()`, `lines()`) renders on demand from the same underlying parsed pages.
+Every `ParseResult` accessor (`text()`, `markdown()`, `json()`, `lines()`, `blocks()`, `flatBlocks()`, `images()`) renders on demand from the same underlying parsed pages.
+
+### Building your own document model: `blocks()` over `markdown()`
+
+`markdown()` reconstructs headings/lists/tables/figure references as rendered text — meant for humans, LLM prompts, or diffing, not for parsing back into a structure. Re-parsing it loses the bounding boxes `liteparse` already computed, and stands a text convention (like a `-----` thematic break for page breaks) in for real document structure.
+
+If you're building your own page/block/document model — the actual reason most integrations touch `markdown()` — start from `Config::$extractBlocks` and `ParseResult::blocks()`/`flatBlocks()` instead:
+
+```php
+use LiteParse\Config;
+use LiteParse\LiteParse;
+use LiteParse\Layout\BlockKind;
+
+$parser = new LiteParse(new Config(extractBlocks: true));
+$result = $parser->parseFile('/path/to/document.pdf');
+
+// Grouped by page — the default, familiar shape:
+foreach ($result->blocks() as $page) {
+    foreach ($page['blocks'] as $block) {
+        if ($block->kind === BlockKind::Heading) {
+            echo str_repeat('#', $block->level ?? 1)." {$block->text}\n";
+        }
+    }
+}
+
+// Or flattened across the whole document, each block still tagged with its own page:
+foreach ($result->flatBlocks() as $block) {
+    printf("p%d %s: %s\n", $block->pageNumber, $block->kind->value, $block->text ?? '');
+}
+```
+
+Each `Block` carries a `bbox` (the union of every source line that fed it — including a bbox on every table cell), reading order matching what `markdown()` renders, and kind-specific fields (`level`/`ordered`/`marker` for lists, `header`/`rows` for tables, `id`/`format` for figures — join a figure block's `id` against `ParseResult::images()` to get its extracted file). See [`Block`](./src/LiteParse/Layout/Block.php) for the full field list. Independent of `outputFormat`; enabling `extractBlocks` never changes the rendered Markdown.
+
+With `Config::$extractImages` (and optionally `imageOutputDir`) on, `ParseResult::images()` returns each embedded image's metadata — `id`, `path` (when written to disk), `bbox`, dimensions, `format`, and `duplicateOf` for repeated images (e.g. a logo reused across pages) — never pixel bytes.
+
+### Images as input, and OCR
+
+`parseFile()`/`parseBytes()` accept a plain image (`.jpg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.svg`) directly, not just PDFs — it's converted to a one-page PDF natively in Rust first (no ImageMagick or other external tool needed). A bare image carries no embedded text, though, so that PDF comes back empty until OCR fills it in. This binding ships without the bundled Tesseract engine (it would add real weight and platform-specific complexity to the build/distribution pipeline), so OCR needs `Config::$ocrServerUrl` pointed at an HTTP OCR server implementing [`OCR_API_SPEC.md`](https://github.com/run-llama/liteparse/blob/main/OCR_API_SPEC.md) — `Config::$ocrEnabled` defaults to `null` and is inferred `true` automatically once a server URL is set; pass `false` explicitly to keep a configured URL around without OCR actually running. liteparse ships ready-to-use reference servers for EasyOCR/PaddleOCR/SuryaOCR in [its own repo](https://github.com/run-llama/liteparse/tree/main/ocr) — see its [OCR guide](https://github.com/run-llama/liteparse/blob/main/docs/src/content/docs/liteparse/guides/ocr.md) for how to build and run one (not shipped or committed in this repo; bring your own):
+
+```php
+$parser = new LiteParse(new Config(
+    ocrServerUrl: 'http://localhost:8828/ocr', // implies ocrEnabled: true
+));
+
+$result = $parser->parseFile('scan.png'); // or a scanned/photographed PDF page
+echo $result->text();
+```
+
+OCR also kicks in automatically on scanned/text-sparse pages and embedded images inside an otherwise-normal PDF — the same config applies, no separate code path. OCR-derived text items carry a `confidence` score and `font_name === 'OCR'` in place of real font metadata (`json()`'s `text_items`), since OCR reports no font metrics. See [`examples/ocr/`](./examples/ocr/) for a full worked example, including the "OCR off on an image" failure mode (silently empty text, not an error) it's easy to trip over.
+
+### Visual citations: showing *where* an answer came from
+
+`ParseResult::search()` gives you a phrase match's bounding box; a page screenshot gives you the pixels to draw it on. Both are in scope from the same parse, so highlighting exactly where a search hit (or an agent's cited answer) sits on the page needs no extra rendering pass:
+
+```php
+$parser = new LiteParse(new Config(dpi: 150.0)); // keep parse and screenshot DPI in sync
+$result = $parser->parseFile('report.pdf');
+
+$matches = $result->search('quarterly revenue');
+$screenshots = $parser->screenshotFile('report.pdf', pageNumbers: array_column($matches, 'page_number'));
+```
+
+A match's `x`/`y`/`width`/`height` are in the same 72-DPI point space as every other bbox in this package, not the screenshot's own pixel space — scale by `dpi / 72` (the DPI the screenshot was rendered at) before drawing. See [`examples/visual-citations/`](./examples/visual-citations/) for the full overlay-drawing example.
 
 ## Features
 
 - **`LiteParse::parseFile()` / `parseBytes()`** — parse from a file path or an in-memory buffer (e.g. a PDF downloaded over the network).
 - **`LiteParse::isComplexFile()` / `isComplexBytes()`** — a cheap per-page pre-check (no OCR, no rendering) reporting whether each page looks scanned, sparse, garbled, or image-heavy — useful for deciding whether a document needs OCR before committing to a full parse.
-- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes. With `Config::$extractScreenshots` on, `ParseResult::screenshots()` returns the same pages' PNGs from the parse that already happened, instead of rendering a second time.
+- **`LiteParse::screenshotFile()` / `screenshotBytes()`** — render selected pages (or the whole document) to PNG bytes. With `Config::$extractScreenshots` on, `ParseResult::screenshots()` returns the same pages' PNGs from the parse that already happened, instead of rendering a second time. Every `Screenshot` also carries `isSolidFill` (blank-page detection, always computed) and `rects` (solid rectangles/lines detected in the raster, needs `Config::$detectScreenshotRects`).
 - **`ParseResult::search()`** — search already-parsed text for phrase matches, with bounding boxes, merged across text items that were split mid-phrase.
 
 ```php
@@ -90,7 +152,7 @@ See [`examples/`](./examples/) for runnable scripts.
 | Field | Default | Notes |
 |---|---|---|
 | `ocrLanguage` | `'eng'` | Tesseract-format language code |
-| `ocrEnabled` | `false` | Requires `ocrServerUrl` — this binding has no built-in OCR engine |
+| `ocrEnabled` | `null` | This binding has no built-in OCR engine. `null` infers from `ocrServerUrl` (set = on, unset = off); pass `true`/`false` to override |
 | `ocrServerUrl` | `null` | HTTP OCR server URL |
 | `ocrServerHeaders` | `[]` | `[[name, value], ...]` sent with every OCR request |
 | `maxPages` | `1000` | |
@@ -103,7 +165,7 @@ See [`examples/`](./examples/) for runnable scripts.
 | `numWorkers` | `1` | Concurrent OCR requests to the HTTP server |
 | `imageMode` | `ImageMode::Placeholder` | Affects `markdown()` image references only |
 | `extractLinks` | `true` | Hyperlinks as `[text](url)` in markdown |
-| `extractImages` | `false` | Extract embedded image bytes/metadata into `ParseResult.images` |
+| `extractImages` | `false` | Extract embedded image metadata into `ParseResult::images()` (never pixel bytes) |
 | `imageOutputDir` | `null` | Directory where extracted embedded images are written; requires `extractImages` |
 | `extractAnnotations` | `false` | Extract all PDF annotations into each parsed page |
 | `cropBox` | `null` | Restrict output to a sub-region of every page: `['top' => ..., 'right' => ..., 'bottom' => ..., 'left' => ...]` fractions |
@@ -114,10 +176,18 @@ See [`examples/`](./examples/) for runnable scripts.
 | `includeComplexity` | `false` | Attach a `complexity` object (text/image coverage, OCR reasons, layout signals) to each page in `json()` |
 | `keepHeadersFooters` | `false` | Keep running headers/footers in `markdown()` instead of stripping them |
 | `extractVectorGraphics` | `false` | Expose page-scoped vector path data (shapes, merged lines) in parse results |
-| `extractBlocks` | `false` | Attach a `blocks` array (headings, paragraphs, tables with per-cell boxes, figures, ...) with bounding boxes to each page in `json()` |
+| `extractBlocks` | `false` | Populate `ParseResult::blocks()`/`flatBlocks()` (and `json()`'s per-page `blocks`) — the recommended way to build your own document model, see [above](#building-your-own-document-model-blocks-over-markdown) |
 | `extractDocumentMetadata` | `false` | Populate `json()`'s top-level `doc_meta` (dates, encryption, signatures, incremental-save markers, raw XMP) |
 | `extractScreenshots` | `false` | Render every page to PNG during `parseFile()`/`parseBytes()`, available via `ParseResult::screenshots()` |
 | `continueOnPageError` | `false` | Continue past a page-level extraction failure instead of aborting the parse; failures land in `json()`'s top-level `page_errors` |
+| `extractFormFields` | `false` | Attach each page's AcroForm widget fields/values to `json()`'s per-page `form_fields` |
+| `extractStructureTree` | `false` | Attach each page's tagged-PDF logical structure tree to `json()`'s per-page `structure_tree` |
+| `extractContentBounds` | `false` | Attach each page's `content_bounds` (union bbox of its top-level content) to `json()` |
+| `extractXfaPackets` | `false` | Extract raw XFA packets from XFA form documents into `json()`'s top-level `xfa_packets` |
+| `extractTextMetadata` | `false` | Include `char_codes`/`trailing_space_generated` on every text item in `json()` |
+| `detectScreenshotRects` | `false` | Detect solid rectangles/lines in rendered screenshots, on `Screenshot::$rects` (full-bitmap scan per page) |
+| `renderFormFields` | `false` | Draw AcroForm field appearances into rendered rasters — initializes a PDFium form-fill environment and runs the document's open/JS actions |
+| `pageOrientationCorrections` | `[]` | `[['page' => 1, 'angle' => 90], ...]` — counter-rotate specific pages by a caller-supplied clockwise angle (0/90/180/270) |
 
 ## How it works
 

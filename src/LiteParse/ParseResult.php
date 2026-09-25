@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LiteParse;
 
 use FFI\CData;
+use LiteParse\Layout\Block;
 
 /**
  * A parsed document. Each accessor renders on demand from the underlying
@@ -47,17 +48,45 @@ final class ParseResult
      *         signature_byte_range_reaches_eof?: bool
      *     },
      *     page_errors: list<array{page: int, message: string}>,
+     *     images: list<array{
+     *         id: string, name: string, path?: string, page: int,
+     *         bbox: array{x: float, y: float, width: float, height: float},
+     *         width: int, height: int, rotation: float, format: string, duplicate_of?: string
+     *     }>,
+     *     xfa_packets: ?list<array{index: int, name?: string, content_length: int, content?: string}>,
+     *     creator: ?string,
+     *     producer: ?string,
      *     pages: list<array{
      *     page_number: int, page_width: float, page_height: float, text: string, markdown?: string,
+     *     content_bounds?: array{x: float, y: float, width: float, height: float},
      *     text_items: list<array{
      *         text: string, x: float, y: float, width: float, height: float, rotation: float,
      *         font_name: ?string, font_size: ?float,
      *         font_height?: float, font_ascent?: float, font_descent?: float,
      *         font_weight?: int, font_flags?: int, text_width?: float,
      *         font_is_buggy?: true, has_unicode_map_error?: true, mcid?: int,
-     *         fill_color?: string, stroke_color?: string, confidence?: float,
-     *         link?: string, strike?: true
+     *         fill_color?: string, stroke_color?: string,
+     *         char_codes?: list<int>, trailing_space_generated?: true,
+     *         confidence?: float, link?: string, strike?: true,
+     *         words?: list<array{text: string, x: float, y: float, width: float, height: float}>
      *     }>,
+     *     form_fields?: list<array{
+     *         id: string, type: string, page: int, annotation_index: int, widget_index: int,
+     *         object_number?: int, name?: string, alternate_name?: string, value?: string,
+     *         export_value?: string, field_flags: int, control_count?: int, control_index?: int,
+     *         checked?: bool, rect?: array{x: float, y: float, width: float, height: float},
+     *         options?: list<string>, selected_options?: list<string>
+     *     }>,
+     *     annotations?: list<array{
+     *         subtype: string, contents?: string, created?: string, modified?: string, title?: string,
+     *         rect?: array{x: float, y: float, width: float, height: float},
+     *         quadpoint_rects?: list<array{x: float, y: float, width: float, height: float}>, uri?: string
+     *     }>,
+     *     structure_tree?: array{roots: list<array{
+     *         type: string, id?: string, actual_text?: string, alt_text?: string, title?: string,
+     *         attributes?: array<string, bool|float|string>, marked_content_ids: list<int>,
+     *         children: list<mixed>, annotations: list<array{subtype: string, contents?: string, created?: string, modified?: string, title?: string, rect?: array{x: float, y: float, width: float, height: float}, quadpoint_rects?: list<array{x: float, y: float, width: float, height: float}>, uri?: string}>
+     *     }>},
      *     complexity?: array{
      *         page_number: int, text_length: int, text_coverage: float,
      *         has_substantial_images: bool, image_block_count: int, image_coverage: float,
@@ -87,7 +116,22 @@ final class ParseResult
      * `blocks` is present per page only when `Config::$extractBlocks` is set — `bbox` on each block
      * is the union of every source line that fed it; a block with no page geometry behind it omits
      * `bbox` entirely. `doc_meta` is `null` unless `Config::$extractDocumentMetadata` is set.
-     * `page_errors` is empty unless `Config::$continueOnPageError` is set.
+     * `page_errors` is empty unless `Config::$continueOnPageError` is set. `images` is empty
+     * unless `Config::$extractImages` is set, and entries never carry pixel bytes — only
+     * `id`/`path`/`bbox`/dimensions/`format` (see `ParseResult::images()`). `xfa_packets` is
+     * `null` unless `Config::$extractXfaPackets` is set (`[]` for a non-XFA document with the
+     * flag on — that distinguishes "didn't ask" from "asked, found nothing"). `creator`/
+     * `producer` come from the PDF `/Info` dict and are always present when the source document
+     * has them, independent of every other flag — distinct from `doc_meta`, which does not carry
+     * them. `content_bounds` is present per page only when `Config::$extractContentBounds` is set.
+     * `form_fields` is present per page only when `Config::$extractFormFields` is set.
+     * `annotations` is present per page only when `Config::$extractAnnotations` is set.
+     * `structure_tree` is present per page only when `Config::$extractStructureTree` is set —
+     * each element's `children` recurses with the same shape (`type`/`id`/`actual_text`/
+     * `alt_text`/`title`/`attributes`/`marked_content_ids`/`children`/`annotations`), which
+     * PHPStan's array-shape syntax can't express, hence `list<mixed>` above.
+     * `char_codes`/`trailing_space_generated` on a text item need `Config::$extractTextMetadata`;
+     * `words` needs `Config::$emitWordBoxes`.
      */
     public function json(): array
     {
@@ -99,6 +143,62 @@ final class ParseResult
         return LiteParseFfi::consumeOwnedString(
             LiteParseFfi::instance()->liteparse_result_json($this->handle),
             'ParseResult::json'
+        );
+    }
+
+    /**
+     * This result's classified layout blocks (headings, paragraphs, lists, tables, figures,
+     * ...), grouped under the page they came from — the recommended way to build your own
+     * document/page model, since each block carries a bounding box and structured
+     * kind-specific fields instead of markdown syntax to be re-parsed. Requires
+     * `Config::$extractBlocks`; empty per page otherwise.
+     *
+     * For a single reading-order list across the whole document instead of grouped by page,
+     * see `flatBlocks()`.
+     *
+     * @return list<array{page_number: int, blocks: list<Block>}>
+     */
+    public function blocks(): array
+    {
+        return array_map(
+            static fn (array $page): array => [
+                'page_number' => $page['page_number'],
+                'blocks' => array_map(
+                    static fn (array $block): Block => Block::fromArray($block, $page['page_number']),
+                    $page['blocks'] ?? [],
+                ),
+            ],
+            $this->json()['pages'],
+        );
+    }
+
+    /**
+     * Every `Block` in the document as one reading-order list, each carrying its own
+     * `Block::$pageNumber` — for a document model that isn't organized by page. Built from
+     * `blocks()`; requires `Config::$extractBlocks`.
+     *
+     * @return list<Block>
+     */
+    public function flatBlocks(): array
+    {
+        return array_merge([], ...array_map(
+            static fn (array $page): array => $page['blocks'],
+            $this->blocks(),
+        ));
+    }
+
+    /**
+     * Metadata for this result's extracted embedded images. Requires
+     * `Config::$extractImages`; empty otherwise. Never carries pixel bytes — read `$path`
+     * (with `Config::$imageOutputDir` set), or join against a `figure` block's `$id`.
+     *
+     * @return list<ExtractedImage>
+     */
+    public function images(): array
+    {
+        return array_map(
+            ExtractedImage::fromArray(...),
+            $this->json()['images'] ?? [],
         );
     }
 

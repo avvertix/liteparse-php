@@ -34,6 +34,8 @@ use FFI\CData;
  * @method int liteparse_screenshot_width(CData $handle, int $idx)
  * @method int liteparse_screenshot_height(CData $handle, int $idx)
  * @method ?CData liteparse_screenshot_bytes(CData $handle, int $idx, CData $out_len)
+ * @method bool liteparse_screenshot_is_solid_fill(CData $handle, int $idx)
+ * @method ?CData liteparse_screenshot_rects_json(CData $handle, int $idx)
  * @method void liteparse_screenshot_list_free(CData $handle)
  * @method ?CData liteparse_search(CData $handle, CData $phrase, int $case_sensitive)
  * @method void liteparse_string_free(?CData $ptr)
@@ -227,11 +229,21 @@ final class LiteParseFfi
                 ? \FFI::string($bytesPtr, (int) $lenPtr->cdata)
                 : '';
 
+            $rectsJson = self::consumeOwnedString(
+                $ffi->liteparse_screenshot_rects_json($listHandle, $i),
+                'ParseResult::screenshots'
+            );
+
             $screenshots[] = new Screenshot(
                 pageNumber: $ffi->liteparse_screenshot_page_number($listHandle, $i),
                 width: $ffi->liteparse_screenshot_width($listHandle, $i),
                 height: $ffi->liteparse_screenshot_height($listHandle, $i),
                 bytes: $bytes,
+                isSolidFill: $ffi->liteparse_screenshot_is_solid_fill($listHandle, $i),
+                rects: array_map(
+                    ScreenshotRect::fromArray(...),
+                    json_decode($rectsJson, associative: true, flags: JSON_THROW_ON_ERROR),
+                ),
             );
         }
 

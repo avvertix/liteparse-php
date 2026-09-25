@@ -33,10 +33,19 @@ use crate::ffi::strings::string_to_owned_c_char;
 /// Also includes the `ParseResult`-level fields that don't live on a page:
 /// `total_pages` (source page count before `max_pages`/`target_pages`
 /// truncation), `doc_meta` (present when `extract_document_metadata` is on,
-/// `null` otherwise), and `page_errors` (populated when
-/// `continue_on_page_error` is on, empty otherwise). Page screenshots are
-/// deliberately not folded in here — PNG bytes would have to go through
-/// base64 — see `liteparse_result_screenshots` instead.
+/// `null` otherwise), `page_errors` (populated when `continue_on_page_error`
+/// is on, empty otherwise), `images` (populated when `extract_images` is
+/// on, empty otherwise — `ExtractedImage.bytes` is `#[serde(skip)]` upstream,
+/// so this is metadata only: `id`/`format` match the `img_{id}.{format}`
+/// reference `markdown()` and `blocks` emit, `path` is where the bytes were
+/// written when `image_output_dir` is set), `xfa_packets` (`null` unless
+/// `extract_xfa_packets` is on; `Some([])` for a non-XFA document, `Some`
+/// with entries for one), and `creator`/`producer` (the PDF `/Info` dict's
+/// entries — always present when the source document has them, independent
+/// of every other flag here; distinct from `doc_meta`, which does not carry
+/// them). Page screenshots are deliberately not folded in here — PNG bytes
+/// would have to go through base64 — see `liteparse_result_screenshots`
+/// instead.
 ///
 /// Returns NULL on error (rare — JSON formatting of already-parsed data does
 /// not normally fail). Free the result with `liteparse_string_free`.
@@ -53,6 +62,10 @@ pub unsafe extern "C" fn liteparse_result_json(handle: *const ResultHandle) -> *
         "total_pages": data.result.total_pages,
         "doc_meta": &data.result.doc_meta,
         "page_errors": &data.result.page_errors,
+        "images": &data.result.images,
+        "xfa_packets": &data.result.xfa_packets,
+        "creator": &data.result.creator,
+        "producer": &data.result.producer,
     })) {
         Ok(s) => string_to_owned_c_char(s),
         Err(e) => {

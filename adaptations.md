@@ -463,3 +463,212 @@ serialized wholesale) as things a clean build does not rule out, and step 5's "f
 serialize" pattern was rewritten to "allowlisted page field," since wholesale serialization is
 exactly what caused bug #2 — the old pattern description was actively wrong advice for a future
 upgrade to follow.
+
+## API-surface audit and `Layout\Block`/`images()` (2026-09-24)
+
+Asked "what new fields were added [since the very first version pin], which matter for
+benchmarking" as a follow-up to the 2.14.7 upgrade. Answering it properly required re-walking
+`ParseResult`/`LiteParseConfig`/`ParsedPage` in the sibling checkout field-by-field against what
+`Config.php`/`ParseResult.php`/`rust/src/ffi/result.rs` actually wire, rather than trusting the
+"Known gaps" list `HANDOFF.md` already had — which turned out to be itself incomplete. Confirmed
+sibling checkout HEAD (`b754dc3`, `wasm-v2.14.7`/`node-v2.14.7` tags) has zero commits touching
+`crates/liteparse/src` since `crates-v2.14.7` (`git log --oneline crates-v2.14.7..HEAD --
+crates/liteparse/src` → empty), so diffing against it is equivalent to diffing against the actual
+pin.
+
+Found five real gaps beyond `HANDOFF.md`'s existing list, three of them present since
+`crates-v2.14.3` and missed by that upgrade's own audit (confirmed via
+`git show crates-v2.14.3:crates/liteparse/src/config.rs`):
+
+1. **`ParseResult.images` had zero accessor.** `extractImages`/`imageOutputDir` were wired as
+   *config inputs* since the very first session, but the resulting `ExtractedImage` metadata
+   (`id`, `name`, `path`, `page`, `bbox`, `width`, `height`, `rotation`, `format`, `duplicate_of` —
+   everything except `bytes`, which upstream marks `#[serde(skip)]` on purpose, "an image payload
+   crossing a boundary goes as a file or a separate blob, keyed by `id`") was never returned. A
+   caller turning on `extractImages` got files on disk with no manifest of what was written where.
+2. **`extractContentBounds` unwired, and `page_to_json`'s existing `content_bounds` allowlist
+   branch was dead code.** Upstream computes `content_bounds` internally regardless (needed for the
+   white-fill heuristic under `extract_vector_graphics`), then explicitly zeroes it back to `None`
+   unless `extract_content_bounds` is `true` (`parser.rs`: `if !self.config.extract_content_bounds
+   { page.content_bounds = None; }`). Present at `crates-v2.14.3` already.
+3. **`extractXfaPackets` → `ParseResult.xfa_packets`** entirely missing from both the binding and
+   `HANDOFF.md`'s gap list. Present at `crates-v2.14.3` already.
+4. **`creator`/`producer`** — top-level `ParseResult` fields (the PDF `/Info` dict's
+   Creator/Producer), confirmed *not* part of `DocumentMetadata` (checked field-for-field, 13
+   fields, no overlap) despite reading like they belong there.
+5. **`ScreenshotResult.is_solid_fill`/`rects`** dropped by both the standalone
+   `liteparse_parser_screenshot_*` calls and the newer `liteparse_result_screenshots` — confirmed
+   via `grep` across `rust/src`, zero matches for either field. `rects` (gated by
+   `detect_screenshot_rects`) never had an accessor path at all, unlike the others here.
+
+Ran a `/grilling` session (via the `mattpocock-skills` plugin's `grill-with-docs` → `grilling` +
+`domain-modeling` skills) to decide how to wire these into the public API, anchored on a concrete
+consumer which today calls `parseFile()->markdown()` and re-parses the Markdown through CommonMark
+to rebuild its own `Page`/`Block` tree. Full transcript of the decisions is in the conversation;
+summary of what shipped:
+
+- **Scope**: `liteparse-php` only. The `onlytext-cloud` rewrite to actually consume the new API is
+  a deliberate follow-up, not part of this pass.
+- **`ParseResult::blocks(): array<array{page_number: int, blocks: Block[]}>`** and
+  **`ParseResult::flatBlocks(): Block[]`** — the recommended path for structure-aware consumers,
+  positioned in the README ahead of the markdown-re-parse pattern. `blocks()` groups by page
+  (the shape existing `json()['pages'][]['blocks']` users already expect); `flatBlocks()` returns
+  one reading-order list per document, every `Block` still carrying its own `$pageNumber` — added
+  because Parxy's own `Page.php` docblock says the team is deliberately moving *away* from
+  Page-wrapped blocks toward a flat block stream with per-block `Location`, so the flat shape
+  should already exist rather than being something every consumer re-derives. Both are decided as
+  an explicit *second* method, not a flag on `blocks()` — page-grouped stays the default so
+  existing-pattern users aren't surprised. Both are pure PHP on top of the existing
+  `jsonString()`/`extractBlocks` output; no Rust change needed.
+- **`Layout\Block`** — one flat class discriminated by a `BlockKind` backed enum (consistent with
+  `OutputFormat`/`ImageMode`'s existing pattern in `Config.php`), mirroring upstream's own
+  `LayoutBlock` shape rather than a subclass-per-kind hierarchy — deliberately *not*
+  over-engineered per direct instruction mid-session. `bbox` stays a raw
+  `array{x,y,width,height}` on `Block` rather than a wrapper VO, for the same reason, and because
+  this package has no business picking a bbox convention on a downstream consumer's behalf (Parxy's
+  own `BoundingBox` is `{x0,y0,x1,y1}`, bottom-left origin — a different shape entirely; conversion
+  is the consumer's job).
+- **`ParseResult::images(): ExtractedImage[]`** — kept separate from `Block` rather than merged
+  onto `figure` blocks (same "don't bloat `Block` with fields only one kind uses" reasoning), joined
+  by the `id`/`format` a figure block already carries. This one needed a real Rust change: folded
+  `"images": &data.result.images` into `liteparse_result_json`'s envelope, same pattern as
+  `doc_meta`/`page_errors`. No new config flag — `extractImages` already gated it upstream.
+- **Parked deliberately**: `xfa_packets`, `extractContentBounds`, `creator`/`producer`, and
+  screenshot `rects`/`is_solid_fill` — real gaps, fully documented in `HANDOFF.md` with exact
+  upstream shapes and gating, but with no concrete consumer driving their shape yet ("we only have
+  one clear use case" — the same over-engineering concern that shaped `Block`/`bbox` above, applied
+  to the whole gap list rather than just one class).
+- **`docs/adr/0001-typed-blocks-raw-json.md`** — records *why* only the blocks layer got typed VOs
+  and `json()`/`lines()`/`search()` stayed raw arrays (a full VO layer over `json()` would mean
+  maintaining a parallel class hierarchy in lockstep with every upstream bump, for fields most
+  consumers only read a handful of; the blocks layer is the one place that cost is worth paying,
+  confirmed by the Parxy case doing exactly that mapping by hand already).
+- **`CONTEXT.md`** created (first use in this repo) — defines `Block`, `structured output`,
+  `page-grouped blocks`, `flat blocks` as the package's public-API vocabulary.
+
+Verified: `cargo build --release` clean, `composer test` 25/25 (5 new tests in
+`tests/Integration/LayoutTest.php`), `composer lint` clean, plus a scratch smoke test against
+`tests/fixtures/pdf-headings-images-tables.pdf` confirming `flatBlocks()`'s page-number tagging
+matches `blocks()`'s grouping exactly, and that `images()` correctly reports the fixture's second
+image as `duplicateOf` the first (same embedded logo referenced from both pages) rather than a
+distinct entry — upstream dedup behavior, not a binding bug.
+
+## Wiring every remaining `LiteParseConfig` field (2026-09-24)
+
+Immediate follow-up to the blocks/images pass: "take all additional fields and capabilities and
+include them." Scope was every item still in `HANDOFF.md`'s "Known gaps" list except
+`ParseSession`/`ParseBatch` (a different API shape — a batch/streaming parser lifecycle, not a
+config flag or output field like the rest of the list — called out separately rather than folded
+in silently). Concretely: `extractFormFields`, `extractStructureTree`, `extractContentBounds`,
+`extractXfaPackets`, `extractTextMetadata`, `detectScreenshotRects`, `renderFormFields`,
+`pageOrientationCorrections`, plus the already-scoped `xfa_packets`/`creator`/`producer`/
+`content_bounds`/screenshot `rects`/`is_solid_fill` fields those flags unlock.
+
+Wiring pattern per field, all following patterns already established by the skill:
+
+- **`extractFormFields`/`extractStructureTree`/`extractContentBounds` needed zero Rust changes.**
+  `page_to_json`'s allowlist already had `form_fields`/`structure_tree`/`content_bounds` branches
+  from earlier sessions — they were simply unreachable because no config flag ever set the
+  upstream field to non-`None`. Wiring the three `Config.php` flags alone made all three live.
+- **`extractXfaPackets` and `creator`/`producer`** — new envelope fields in `liteparse_result_json`,
+  same pattern as `doc_meta`/`images`. `creator`/`producer` need no config flag at all — they're
+  unconditional top-level `ParseResult` fields (the PDF `/Info` dict's entries), present whenever
+  the source document has them.
+- **`extractTextMetadata`** needed zero Rust changes for a different reason than the first group:
+  `page_to_json` already serializes `&page.text_items` wholesale (`TextItem`'s own `Serialize`
+  derive, not an allowlist — unlike `ParsedPage` itself), so `char_codes`/`trailing_space_generated`
+  reach PHP automatically the moment upstream populates them. Only `Config.php`'s flag and the
+  `ParseResult::json()` docblock needed updating. Same reasoning retroactively explained why
+  `words` (`Config::$emitWordBoxes`) was already reaching PHP correctly despite never being
+  documented — fixed that docblock gap in the same pass.
+- **`detectScreenshotRects`/`is_solid_fill`** needed real new Rust: two accessors,
+  `liteparse_screenshot_is_solid_fill` (returns `bool` directly — confirmed cbindgen already
+  emits `#include <stdbool.h>` in the generated header despite no prior function using it) and
+  `liteparse_screenshot_rects_json` (a JSON-string accessor, matching the existing small-struct
+  pattern rather than building a second nested handle type for a handful of rects per screenshot).
+  `Screenshot.php` gained `isSolidFill`/`rects` properties and a new `ScreenshotRect` VO;
+  `is_solid_fill` needed no config flag (always computed upstream), `rects` needs
+  `detectScreenshotRects`.
+- **`renderFormFields`/`pageOrientationCorrections`** are pure config inputs with no new output
+  shape — they change existing raster bytes / text-item coordinates, not what gets returned.
+  Config.php flags only.
+
+One real mistake caught by testing rather than assumed correct from reading: the original plan
+(and first docblock draft) assumed `page.structure_tree` was shaped like the internal, doc-hidden
+`StructNode` type (`{role, mcids, bbox, alt_text}`) found by grepping `types.rs` for a
+plausible-sounding struct name. Running the fixture with `extractStructureTree: true` produced a
+completely different, recursive shape — `StructNode` backs the *different*, deliberately-internal
+`struct_nodes` field; `structure_tree` is actually `Option<StructureTree>`
+(`{roots: [{type, id?, actual_text?, alt_text?, title?, attributes?, marked_content_ids, children,
+annotations}, ...]}`, `children` recursing). Caught immediately because `ExtendedFieldsTest`
+asserted against real output rather than the assumed shape, failed, and the actual JSON was
+inspected directly (`var_export`) to correct it — the exact discipline the skill's step 4 already
+calls out for markdown/table classification, evidently generalizes to *any* field whose shape
+wasn't independently confirmed by running the parser.
+
+Verified: `cargo build --release` clean, new symbols confirmed present in the regenerated
+`include/liteparse_php.h`, `composer test` 34/34 (9 new tests in
+`tests/Integration/ExtendedFieldsTest.php`), `composer lint` clean, plus a scratch smoke test
+exercising every new flag together against the fixture: `content_bounds` populated with real
+coordinates, `form_fields`/`structure_tree` present as page keys (structure tree non-trivial —
+the fixture is a tagged PDF), `char_codes`/`trailing_space_generated` gated correctly (present only
+with the flag on, `trailing_space_generated` correctly omitted rather than `false` per its
+`skip_serializing_if`), `xfa_packets` correctly `null` off / `[]` on for this non-XFA fixture,
+`creator`/`producer` present unconditionally (`"Typst 0.14.2"` / `null` for this fixture), and
+`is_solid_fill`/`rects` populated identically through both `screenshots()` and the standalone
+`screenshotFile()` path.
+
+## Images as input, OCR, and visual citations (2026-09-25)
+
+Prompted by a real downstream need: images as `parseFile()`/`parseBytes()` input, OCR via an
+HTTP server (EasyOCR specifically), and the "visual citations" pattern (highlight where a search
+match sits on the rendered page). Expected this to require real wiring work; it didn't — every
+`Config` field needed (`ocrEnabled`, `ocrServerUrl`, `ocrServerHeaders`, `ocrLanguage`,
+`tessdataPath`, `ocrFailureFatal`, `ocrHedgeDelaysMs`, `numWorkers`) was already wired in the
+2026-09-24 "wire everything remaining" pass, and `ParseResult::search()` already existed. The
+actual gap was verification and documentation: `README.md` carried a stale claim ("images is not
+tested and not provided so far") left over from before upstream dropped the ImageMagick
+dependency for image→PDF conversion (`crates-v2.8.0` — see
+`crates/liteparse/src/conversion.rs`, native Rust raster→PDF embedding, DPI read from the
+image's own metadata with a 150 DPI fallback). `LiteParse.php`'s `parseFile()`/`parseBytes()`
+docblocks still said image conversion "requires LibreOffice and/or ImageMagick", which was true
+of an earlier liteparse version but not this one.
+
+Verified for real rather than trusting the docs correction alone:
+
+1. Built and ran the reference EasyOCR server from `../liteparse/ocr/easyocr` via a local,
+   deliberately uncommitted `compose.yaml` (`docker compose up -d easyocr`, port 8828) — the
+   user had already built the image before this session started. Kept out of the repo on
+   purpose (decided explicitly, not by default): it's a personal dev convenience pointing at an
+   image built from a sibling checkout, not something a fresh clone of this repo can run as-is.
+2. Rendered page 1 of the committed fixture (`tests/fixtures/pdf-headings-images-tables.pdf`) to
+   a PNG via `screenshotFile()` at 200 DPI — a real raster with no PDF structure and no embedded
+   text, standing in for a photographed/scanned page.
+3. Fed that PNG straight into `parseFile()` (never touching the PDF) with `ocrEnabled: false`
+   (the default) — confirmed `json()['pages'][0]['text']` comes back empty, not an error. Easy
+   to trip over: pointing `parseFile()` at a bare image without OCR configured silently yields
+   nothing.
+4. Fed the same PNG in again with `ocrEnabled: true, ocrServerUrl: 'http://localhost:8828/ocr'`
+   — got back the full recovered text (headings, paragraphs, the ordered/unordered list nesting,
+   OCR mangling a few ligatures as expected — e.g. "In this report; we will write" for "In this
+   report, we will write", a semicolon/comma OCR confusion, not a bug in this binding). Text
+   items carried `confidence` (84% average on this clean synthetic render) and `font_name ===
+   'OCR'` in place of real font metrics, exactly as `Config::$extractTextMetadata`'s docblock
+   already promised. First request after a language switch took ~37s (EasyOCR's one-time reader
+   init for that language); irrelevant to correctness, worth knowing before assuming something
+   hung.
+5. For visual citations: parsed the fixture, called `search('lorem ipsum', caseSensitive:
+   false)` (5 matches across both pages, including one italicized inline instance), rendered the
+   matched pages via `screenshotFile()` at the *same* DPI as the parse, and drew a semi-transparent
+   yellow filled rectangle over each match's bbox scaled by `dpi / 72` — the same point→pixel
+   scaling already established for `Screenshot::$rects` in `examples/screenshot/`. Visually
+   confirmed via `Read` on the output PNG: every highlight box landed exactly on the matched text,
+   including the italic "lorem ipsum" inside a sentence, with no drift.
+
+Shipped as two new runnable examples (`examples/ocr/ocr.php`, `examples/visual-citations/
+visual-citations.php`) plus the doc corrections (`README.md`'s stale note, `LiteParse.php`'s
+`parseFile()`/`parseBytes()` docblocks). No `Config`/Rust/FFI changes — nothing was missing at
+that layer, only at the verification-and-documentation layer. Both examples' docblocks and
+README point at liteparse's own OCR guide/reference-server repo for standing one up, rather than
+at a local `compose.yaml` created for convenience that must be kept as git ignored. No doc in
+this repo should read as if it ships or is guaranteed present.

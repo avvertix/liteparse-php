@@ -76,6 +76,15 @@ explicitly aimed at that bug (see `adaptations.md`, "2.11.1 → 2.14.3"). Re-che
 exact case on every future bump — don't mark it fixed without a fresh, direct
 observation on this fixture, not a different or personal document.
 
+The same discipline applies to any *new* field's shape, not just classification bugs.
+Wiring the 2026-09-24 "remaining gaps" batch (see `adaptations.md`), a struct name found
+by grepping `types.rs` (`StructNode`) turned out to back a different, deliberately-internal
+field (`struct_nodes`) than the one actually being wired (`structure_tree`, really
+`Option<StructureTree>` — a recursive tree, nothing like `StructNode`'s flat shape). Caught
+immediately because a test asserted against real fixture output instead of the assumed
+shape and failed. Grepping a struct name upstream is a hypothesis about a new field's
+shape, not a fact — run the fixture and read the actual JSON before writing the docblock.
+
 ## 5. Wire only the fields asked for — pick the right pattern
 
 Three established patterns, by where the field lives and what it holds:
@@ -92,6 +101,18 @@ Three established patterns, by where the field lives and what it holds:
   no accessor by default; only `.pages` is serialized. Fold it into
   `liteparse_result_json`'s top-level JSON object as a sibling of `"pages"`
   (`rust/src/ffi/result.rs`). Used for `total_pages`, `doc_meta`, `page_errors`.
+
+`src/LiteParse/Layout/BlockKind.php` is a PHP backed enum mirroring the exact set of `kind`
+string literals upstream's `LayoutBlock` can emit (`heading`, `paragraph`, `list_item`,
+`code`, `table`, `merged_table`, `grid_fallback`, `rule`, `figure` — confirmed exhaustive by
+grepping `LayoutBlock::of("...")` call sites in `crates/liteparse/src/layout.rs`, not by
+reading a docblock). `Block::fromArray()` calls `BlockKind::from($data['kind'])`, which
+throws a `\ValueError` on any kind string with no matching case — the correct, fail-loud
+behavior if it ever happens, not a bug to fix defensively. But it means **a new block kind
+added upstream is a runtime exception for every `blocks()`/`flatBlocks()` caller**, not a
+compile error like a Rust-side breaking change would be. Re-run the same grep every bump and
+add any new case to `BlockKind` before it ships, the same way step 3 audits `config.rs`
+field-by-field.
 - **Handle + accessor** — binary or large payloads (PNG bytes, anything you would not
   base64 through JSON) get their own opaque handle and by-index C accessors, mirroring
   `ScreenshotListHandle` in `rust/src/ffi/handles.rs` / `rust/src/ffi/screenshot.rs`. Used

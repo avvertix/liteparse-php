@@ -120,10 +120,19 @@ struct ResultHandle *liteparse_parser_parse_bytes(const struct ParserHandle *han
  * Also includes the `ParseResult`-level fields that don't live on a page:
  * `total_pages` (source page count before `max_pages`/`target_pages`
  * truncation), `doc_meta` (present when `extract_document_metadata` is on,
- * `null` otherwise), and `page_errors` (populated when
- * `continue_on_page_error` is on, empty otherwise). Page screenshots are
- * deliberately not folded in here — PNG bytes would have to go through
- * base64 — see `liteparse_result_screenshots` instead.
+ * `null` otherwise), `page_errors` (populated when `continue_on_page_error`
+ * is on, empty otherwise), `images` (populated when `extract_images` is
+ * on, empty otherwise — `ExtractedImage.bytes` is `#[serde(skip)]` upstream,
+ * so this is metadata only: `id`/`format` match the `img_{id}.{format}`
+ * reference `markdown()` and `blocks` emit, `path` is where the bytes were
+ * written when `image_output_dir` is set), `xfa_packets` (`null` unless
+ * `extract_xfa_packets` is on; `Some([])` for a non-XFA document, `Some`
+ * with entries for one), and `creator`/`producer` (the PDF `/Info` dict's
+ * entries — always present when the source document has them, independent
+ * of every other flag here; distinct from `doc_meta`, which does not carry
+ * them). Page screenshots are deliberately not folded in here — PNG bytes
+ * would have to go through base64 — see `liteparse_result_screenshots`
+ * instead.
  *
  * Returns NULL on error (rare — JSON formatting of already-parsed data does
  * not normally fail). Free the result with `liteparse_string_free`.
@@ -302,6 +311,30 @@ uint32_t liteparse_screenshot_height(const struct ScreenshotListHandle *handle, 
 const uint8_t *liteparse_screenshot_bytes(const struct ScreenshotListHandle *handle,
                                           uintptr_t idx,
                                           uintptr_t *out_len);
+
+/**
+ * Whether every pixel of the screenshot at `idx` is the same color (a blank
+ * page after render). Always computed, regardless of config. `false` if
+ * `idx` is out of range.
+ *
+ * # Safety
+ * `handle` must be a valid, non-null pointer returned by a
+ * `liteparse_parser_screenshot_*` function and not yet freed.
+ */
+bool liteparse_screenshot_is_solid_fill(const struct ScreenshotListHandle *handle, uintptr_t idx);
+
+/**
+ * Solid rectangles/lines detected in the screenshot at `idx`, as a JSON
+ * array of `{x, y, width, height, color, is_line}`. Empty (`"[]"`) unless
+ * the parser was configured with `detect_screenshot_rects` — one raster scan
+ * per page, so it is off by default. Returns NULL and sets the last error if
+ * `idx` is out of range. Free the result with `liteparse_string_free`.
+ *
+ * # Safety
+ * `handle` must be a valid, non-null pointer returned by a
+ * `liteparse_parser_screenshot_*` function and not yet freed.
+ */
+char *liteparse_screenshot_rects_json(const struct ScreenshotListHandle *handle, uintptr_t idx);
 
 /**
  * # Safety

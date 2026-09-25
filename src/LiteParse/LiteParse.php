@@ -36,9 +36,14 @@ final class LiteParse
     }
 
     /**
-     * Parse a document from a file path. Non-PDF files (DOCX, XLSX, PPTX,
-     * images, ...) are converted to PDF automatically, which requires
-     * LibreOffice and/or ImageMagick to be installed on the host.
+     * Parse a document from a file path. Non-PDF files are converted to PDF
+     * automatically first: office formats (DOCX, XLSX, PPTX, ...) need
+     * LibreOffice installed on the host; images (JPG, PNG, GIF, BMP, TIFF,
+     * WEBP, SVG) are converted natively in Rust, no external tool needed.
+     *
+     * A bare image carries no embedded text, so `text()`/`json()` come back
+     * empty unless `Config::$ocrServerUrl` is set (which also turns OCR on
+     * unless `Config::$ocrEnabled` says otherwise) — see `examples/ocr/`.
      *
      * @throws Exception\LiteParseException on failure.
      */
@@ -54,8 +59,10 @@ final class LiteParse
     }
 
     /**
-     * Parse a document from raw in-memory bytes (e.g. a PDF downloaded over
-     * the network).
+     * Parse a document from raw in-memory bytes (e.g. a PDF, or an image,
+     * downloaded over the network or held in memory already — no temp file
+     * needed). Same format/conversion/OCR rules as `parseFile()`; the format
+     * is sniffed from the bytes themselves rather than a file extension.
      *
      * @throws Exception\LiteParseException on failure.
      */

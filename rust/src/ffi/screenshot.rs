@@ -8,7 +8,7 @@ use crate::ffi::handles::{
     ParserData, ParserHandle, ScreenshotListData, ScreenshotListHandle, parser_ref,
     screenshot_list_drop, screenshot_list_into_handle, screenshot_list_ref,
 };
-use crate::ffi::strings::c_char_to_string;
+use crate::ffi::strings::{c_char_to_string, string_to_owned_c_char};
 use crate::runtime::block_on;
 
 /// Render document pages to PNG screenshots. `page_numbers` (1-based) selects
@@ -167,6 +167,52 @@ pub unsafe extern "C" fn liteparse_screenshot_bytes(
                 unsafe { *out_len = 0 };
             }
             std::ptr::null()
+        }
+    }
+}
+
+/// Whether every pixel of the screenshot at `idx` is the same color (a blank
+/// page after render). Always computed, regardless of config. `false` if
+/// `idx` is out of range.
+///
+/// # Safety
+/// `handle` must be a valid, non-null pointer returned by a
+/// `liteparse_parser_screenshot_*` function and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_screenshot_is_solid_fill(
+    handle: *const ScreenshotListHandle,
+    idx: usize,
+) -> bool {
+    let data = unsafe { screenshot_list_ref(handle) };
+    data.items.get(idx).map(|s| s.is_solid_fill).unwrap_or(false)
+}
+
+/// Solid rectangles/lines detected in the screenshot at `idx`, as a JSON
+/// array of `{x, y, width, height, color, is_line}`. Empty (`"[]"`) unless
+/// the parser was configured with `detect_screenshot_rects` — one raster scan
+/// per page, so it is off by default. Returns NULL and sets the last error if
+/// `idx` is out of range. Free the result with `liteparse_string_free`.
+///
+/// # Safety
+/// `handle` must be a valid, non-null pointer returned by a
+/// `liteparse_parser_screenshot_*` function and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_screenshot_rects_json(
+    handle: *const ScreenshotListHandle,
+    idx: usize,
+) -> *mut c_char {
+    let data = unsafe { screenshot_list_ref(handle) };
+    match data.items.get(idx) {
+        Some(item) => match serde_json::to_string(&item.rects) {
+            Ok(s) => string_to_owned_c_char(s),
+            Err(e) => {
+                set_last_error(format!("failed to format JSON: {e}"));
+                std::ptr::null_mut()
+            }
+        },
+        None => {
+            set_last_error(format!("screenshot index {idx} out of range"));
+            std::ptr::null_mut()
         }
     }
 }
