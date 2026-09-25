@@ -13,9 +13,14 @@ final class Config
 {
     /**
      * @param  string  $ocrLanguage  Tesseract-format language code ("eng", "fra", "deu", ...).
-     * @param  bool  $ocrEnabled  Whether OCR runs on text-sparse pages and embedded images.
-     *                            This binding ships without the built-in Tesseract engine, so
-     *                            OCR requires $ocrServerUrl to also be set.
+     * @param  ?bool  $ocrEnabled  Whether OCR runs on text-sparse pages and embedded images.
+     *                             This binding ships without the built-in Tesseract engine, so
+     *                             OCR requires $ocrServerUrl to also be set. Defaults to null:
+     *                             left unset, this is inferred from whether $ocrServerUrl is
+     *                             set (true) or not (false). Pass true/false explicitly to
+     *                             override that inference either way — e.g. false with a
+     *                             $ocrServerUrl still configured keeps the URL around (for a
+     *                             config toggled by an env var elsewhere) without OCR running.
      * @param  ?string  $ocrServerUrl  HTTP OCR server URL (see liteparse/OCR_API_SPEC.md and
      *                                 the easyocr/paddleocr/suryaocr reference servers).
      * @param  array<int, array{0: string, 1: string}>  $ocrServerHeaders  Extra HTTP headers
@@ -113,7 +118,7 @@ final class Config
      */
     public function __construct(
         public readonly string $ocrLanguage = 'eng',
-        public readonly bool $ocrEnabled = false,
+        public readonly ?bool $ocrEnabled = null,
         public readonly ?string $ocrServerUrl = null,
         public readonly array $ocrServerHeaders = [],
         public readonly ?string $tessdataPath = null,
@@ -156,7 +161,10 @@ final class Config
     {
         return json_encode([
             'ocr_language' => $this->ocrLanguage,
-            'ocr_enabled' => $this->ocrEnabled,
+            // Left unset (null), infer from ocrServerUrl — a configured server URL is a clear
+            // enough signal of intent that requiring ocrEnabled: true as well would just be a
+            // footgun for no benefit. An explicit true/false always wins over the inference.
+            'ocr_enabled' => $this->ocrEnabled ?? (is_string($this->ocrServerUrl) && $this->ocrServerUrl !== ''),
             'ocr_server_url' => $this->ocrServerUrl,
             'ocr_server_headers' => $this->ocrServerHeaders,
             'tessdata_path' => $this->tessdataPath,
