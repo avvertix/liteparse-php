@@ -70,6 +70,29 @@ marked_content_ids, children, annotations}, ...]}`) — confirmed by actually ru
 fixture, not by reading the struct name and assuming. `grep`-ing a struct name upstream
 is a hypothesis, not a fact; see step 4 of the skill.
 
+## Images as input, and OCR — verified end-to-end 2026-09-25
+
+`parseFile()`/`parseBytes()` already accepted plain images before this note existed — nothing
+was wired that wasn't already there (`ocrEnabled`/`ocrServerUrl`/`ocrServerHeaders` were all on
+the "wired" list above already). What was missing was verification and docs: `README.md` used
+to claim images were "not tested and not provided", which was stale — upstream dropped the
+ImageMagick dependency for image→PDF conversion back in `crates-v2.8.0` (native Rust now,
+`crates/liteparse/src/conversion.rs`), and this binding never actually had its own image-input
+code path to go stale, just an unverified claim about it.
+
+Verified for real: rendered a fixture page to PNG via `screenshotFile()`, fed that PNG straight
+into `parseFile()` (no PDF involved) against the reference EasyOCR server
+(`../liteparse/ocr/easyocr`, run locally via a `compose.yaml` that is **intentionally not
+committed** — see below), and got back correctly-boxed OCR text (`font_name === 'OCR'`,
+`confidence` populated, ~84% average on a clean synthetic render). See `examples/ocr/ocr.php`.
+First OCR request after a language switch pays a ~30-40s EasyOCR reader-init cost — expected,
+not a bug, only visible on the first call.
+
+`ParseResult::search()` + `screenshots()`/`screenshotFile()` together already cover liteparse's
+"visual citations" pattern (search a phrase, highlight its bbox on the rendered page) — no new
+API needed, just the same `dpi / 72` point→pixel scaling already established for
+`Screenshot::$rects` in `examples/screenshot/`. See `examples/visual-citations/`.
+
 ## The one open bug to re-verify on every future bump
 
 Table header attachment: a table's header row can still come back as a separate

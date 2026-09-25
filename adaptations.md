@@ -617,3 +617,58 @@ with the flag on, `trailing_space_generated` correctly omitted rather than `fals
 `creator`/`producer` present unconditionally (`"Typst 0.14.2"` / `null` for this fixture), and
 `is_solid_fill`/`rects` populated identically through both `screenshots()` and the standalone
 `screenshotFile()` path.
+
+## Images as input, OCR, and visual citations (2026-09-25)
+
+Prompted by a real downstream need: images as `parseFile()`/`parseBytes()` input, OCR via an
+HTTP server (EasyOCR specifically), and the "visual citations" pattern (highlight where a search
+match sits on the rendered page). Expected this to require real wiring work; it didn't — every
+`Config` field needed (`ocrEnabled`, `ocrServerUrl`, `ocrServerHeaders`, `ocrLanguage`,
+`tessdataPath`, `ocrFailureFatal`, `ocrHedgeDelaysMs`, `numWorkers`) was already wired in the
+2026-09-24 "wire everything remaining" pass, and `ParseResult::search()` already existed. The
+actual gap was verification and documentation: `README.md` carried a stale claim ("images is not
+tested and not provided so far") left over from before upstream dropped the ImageMagick
+dependency for image→PDF conversion (`crates-v2.8.0` — see
+`crates/liteparse/src/conversion.rs`, native Rust raster→PDF embedding, DPI read from the
+image's own metadata with a 150 DPI fallback). `LiteParse.php`'s `parseFile()`/`parseBytes()`
+docblocks still said image conversion "requires LibreOffice and/or ImageMagick", which was true
+of an earlier liteparse version but not this one.
+
+Verified for real rather than trusting the docs correction alone:
+
+1. Built and ran the reference EasyOCR server from `../liteparse/ocr/easyocr` via a local,
+   deliberately uncommitted `compose.yaml` (`docker compose up -d easyocr`, port 8828) — the
+   user had already built the image before this session started. Kept out of the repo on
+   purpose (decided explicitly, not by default): it's a personal dev convenience pointing at an
+   image built from a sibling checkout, not something a fresh clone of this repo can run as-is.
+2. Rendered page 1 of the committed fixture (`tests/fixtures/pdf-headings-images-tables.pdf`) to
+   a PNG via `screenshotFile()` at 200 DPI — a real raster with no PDF structure and no embedded
+   text, standing in for a photographed/scanned page.
+3. Fed that PNG straight into `parseFile()` (never touching the PDF) with `ocrEnabled: false`
+   (the default) — confirmed `json()['pages'][0]['text']` comes back empty, not an error. Easy
+   to trip over: pointing `parseFile()` at a bare image without OCR configured silently yields
+   nothing.
+4. Fed the same PNG in again with `ocrEnabled: true, ocrServerUrl: 'http://localhost:8828/ocr'`
+   — got back the full recovered text (headings, paragraphs, the ordered/unordered list nesting,
+   OCR mangling a few ligatures as expected — e.g. "In this report; we will write" for "In this
+   report, we will write", a semicolon/comma OCR confusion, not a bug in this binding). Text
+   items carried `confidence` (84% average on this clean synthetic render) and `font_name ===
+   'OCR'` in place of real font metrics, exactly as `Config::$extractTextMetadata`'s docblock
+   already promised. First request after a language switch took ~37s (EasyOCR's one-time reader
+   init for that language); irrelevant to correctness, worth knowing before assuming something
+   hung.
+5. For visual citations: parsed the fixture, called `search('lorem ipsum', caseSensitive:
+   false)` (5 matches across both pages, including one italicized inline instance), rendered the
+   matched pages via `screenshotFile()` at the *same* DPI as the parse, and drew a semi-transparent
+   yellow filled rectangle over each match's bbox scaled by `dpi / 72` — the same point→pixel
+   scaling already established for `Screenshot::$rects` in `examples/screenshot/`. Visually
+   confirmed via `Read` on the output PNG: every highlight box landed exactly on the matched text,
+   including the italic "lorem ipsum" inside a sentence, with no drift.
+
+Shipped as two new runnable examples (`examples/ocr/ocr.php`, `examples/visual-citations/
+visual-citations.php`) plus the doc corrections (`README.md`'s stale note, `LiteParse.php`'s
+`parseFile()`/`parseBytes()` docblocks). No `Config`/Rust/FFI changes — nothing was missing at
+that layer, only at the verification-and-documentation layer. Both examples' docblocks and
+README point at liteparse's own OCR guide/reference-server repo for standing one up, rather than
+at a local `compose.yaml` created for convenience that must be kept as git ignored. No doc in
+this repo should read as if it ships or is guaranteed present.

@@ -6,3 +6,4 @@
 /examples/*/output/
 .DS_Store
 composer.lock
+compose.yaml

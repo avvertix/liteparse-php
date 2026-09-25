@@ -6,7 +6,7 @@ Given a PDF this package extracts text with bounding boxes and renders it as str
 
 
 > [!NOTE]
-> The native bindings are tested only for PDF files. Support for DOC/DOCX/XLS/XLSX/PPT/PPTX, and images is not tested and not provided so far.
+> Only PDF and image files are supported. Support for Office documents (DOCX/XLSX/PPTX) is untested and not planned.
 
 
 ## Requirements
@@ -89,6 +89,35 @@ Each `Block` carries a `bbox` (the union of every source line that fed it — in
 
 With `Config::$extractImages` (and optionally `imageOutputDir`) on, `ParseResult::images()` returns each embedded image's metadata — `id`, `path` (when written to disk), `bbox`, dimensions, `format`, and `duplicateOf` for repeated images (e.g. a logo reused across pages) — never pixel bytes.
 
+### Images as input, and OCR
+
+`parseFile()`/`parseBytes()` accept a plain image (`.jpg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.svg`) directly, not just PDFs — it's converted to a one-page PDF natively in Rust first (no ImageMagick or other external tool needed). A bare image carries no embedded text, though, so that PDF comes back empty until OCR fills it in. This binding ships without the bundled Tesseract engine (it would add real weight and platform-specific complexity to the build/distribution pipeline), so OCR needs `Config::$ocrServerUrl` pointed at an HTTP OCR server implementing [`OCR_API_SPEC.md`](https://github.com/run-llama/liteparse/blob/main/OCR_API_SPEC.md) — `Config::$ocrEnabled` defaults to `null` and is inferred `true` automatically once a server URL is set; pass `false` explicitly to keep a configured URL around without OCR actually running. liteparse ships ready-to-use reference servers for EasyOCR/PaddleOCR/SuryaOCR in [its own repo](https://github.com/run-llama/liteparse/tree/main/ocr) — see its [OCR guide](https://github.com/run-llama/liteparse/blob/main/docs/src/content/docs/liteparse/guides/ocr.md) for how to build and run one (not shipped or committed in this repo; bring your own):
+
+```php
+$parser = new LiteParse(new Config(
+    ocrServerUrl: 'http://localhost:8828/ocr', // implies ocrEnabled: true
+));
+
+$result = $parser->parseFile('scan.png'); // or a scanned/photographed PDF page
+echo $result->text();
+```
+
+OCR also kicks in automatically on scanned/text-sparse pages and embedded images inside an otherwise-normal PDF — the same config applies, no separate code path. OCR-derived text items carry a `confidence` score and `font_name === 'OCR'` in place of real font metadata (`json()`'s `text_items`), since OCR reports no font metrics. See [`examples/ocr/`](./examples/ocr/) for a full worked example, including the "OCR off on an image" failure mode (silently empty text, not an error) it's easy to trip over.
+
+### Visual citations: showing *where* an answer came from
+
+`ParseResult::search()` gives you a phrase match's bounding box; a page screenshot gives you the pixels to draw it on. Both are in scope from the same parse, so highlighting exactly where a search hit (or an agent's cited answer) sits on the page needs no extra rendering pass:
+
+```php
+$parser = new LiteParse(new Config(dpi: 150.0)); // keep parse and screenshot DPI in sync
+$result = $parser->parseFile('report.pdf');
+
+$matches = $result->search('quarterly revenue');
+$screenshots = $parser->screenshotFile('report.pdf', pageNumbers: array_column($matches, 'page_number'));
+```
+
+A match's `x`/`y`/`width`/`height` are in the same 72-DPI point space as every other bbox in this package, not the screenshot's own pixel space — scale by `dpi / 72` (the DPI the screenshot was rendered at) before drawing. See [`examples/visual-citations/`](./examples/visual-citations/) for the full overlay-drawing example.
+
 ## Features
 
 - **`LiteParse::parseFile()` / `parseBytes()`** — parse from a file path or an in-memory buffer (e.g. a PDF downloaded over the network).
@@ -123,7 +152,7 @@ See [`examples/`](./examples/) for runnable scripts.
 | Field | Default | Notes |
 |---|---|---|
 | `ocrLanguage` | `'eng'` | Tesseract-format language code |
-| `ocrEnabled` | `false` | Requires `ocrServerUrl` — this binding has no built-in OCR engine |
+| `ocrEnabled` | `null` | This binding has no built-in OCR engine. `null` infers from `ocrServerUrl` (set = on, unset = off); pass `true`/`false` to override |
 | `ocrServerUrl` | `null` | HTTP OCR server URL |
 | `ocrServerHeaders` | `[]` | `[[name, value], ...]` sent with every OCR request |
 | `maxPages` | `1000` | |
