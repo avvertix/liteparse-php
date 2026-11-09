@@ -672,3 +672,27 @@ that layer, only at the verification-and-documentation layer. Both examples' doc
 README point at liteparse's own OCR guide/reference-server repo for standing one up, rather than
 at a local `compose.yaml` created for convenience that must be kept as git ignored. No doc in
 this repo should read as if it ships or is guaranteed present.
+## 2.14.7 → 2.18.0 (2026-11-09)
+
+**Build:** bumped pin, `cargo build --release` compiled with zero errors; `composer test`
+(40 tests) and `composer lint` clean.
+
+**Audit (`git diff crates-v2.14.7..crates-v2.18.0`):**
+- `config.rs`: no new `LiteParseConfig` fields, only helpers (`effective_emit_word_boxes`,
+  `output_word_boxes`). Nothing to add to `Config.php`. Note: `extract_blocks`/markdown now
+  force word-box extraction internally; bindings only *output* word boxes if `emit_word_boxes`
+  or markdown, so no payload change for us.
+- `types.rs`: new `TextItem.math` and `ocr_deskew`, both `skip_serializing_if`; our
+  `page_to_json` allowlist is unaffected. Not wired.
+- `LayoutBlock::of("...")` kinds unchanged (code, figure, grid_fallback, heading, list_item,
+  merged_table, paragraph, rule, table) — `BlockKind` already exhaustive.
+
+**Upstream signal:** many markdown/table fixes (cross-region header recovery `353c072`,
+`f6e869b`, two-level borderless headers `6c8a69c`, dropped-text recovery), glyph clipping,
+garble/deskew/math detection, OCR sliding window, CJK fixes. Opt-in per-glyph advance widths
+on raw text items (not wired).
+
+**Fixture check (`tests/fixtures/pdf-headings-images-tables.pdf`, `markdown()`):** the table
+header bug is STILL OPEN — "Shape Volume Parameters" is emitted as a bold paragraph between
+two `---` rules, and the table's header row is the first body row ("cylinder ..."). Cell text
+is also still mangled (`2 - 2 ℎ 4`).
