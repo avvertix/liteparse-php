@@ -8,8 +8,8 @@ don't let it drift into a second history log.
 
 ## Current pin
 
-`rust/Cargo.toml`: `liteparse = "2.14.7"` (crates.io, real dependency — not a local path).
-Last upgraded from `2.14.3` on 2026-09-24.
+`rust/Cargo.toml`: `liteparse = "2.18.0"` (crates.io, real dependency — not a local path).
+Last upgraded from `2.14.7` on 2026-11-09 (2.14.3 → 2.14.7 was 2026-09-24).
 
 ## Wired `Config.php` flags
 
@@ -99,7 +99,7 @@ Table header attachment: a table's header row can still come back as a separate
 `paragraph`/`heading` block sitting outside the `Table` block (`header: null` in
 `markdown()`'s classifier, and outside the `table` block's `bbox` in `extract_blocks`
 output) instead of inside it, when the header lands in a different xy-cut region than
-the table body. Reproduces as of 2.14.7 (re-verified; unchanged since 2.14.3 — no
+the table body. Reproduces as of 2.18.0 (re-verified 2026-11-09 despite many upstream table/header commits; was also present at 2.14.7 and 2.14.3 — no
 table-classification commit landed in the 2.14.3 → 2.14.7 range) on the committed fixture
 (`tests/fixtures/pdf-headings-images-tables.pdf`, page 2's "Shape / Volume / Parameters"
 table) despite three upstream commits between 2.11.1 and 2.14.3 aimed directly at this
